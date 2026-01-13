@@ -272,11 +272,11 @@ ipcMain.handle('extract-account-info', async (_event, url: string) => {
   try {
     logger.info('开始提取公众号信息', { url: url.substring(0, 100) })
 
-    const biz = extractBizFromUrl(url)
+    const biz = await extractBizFromUrl(url)
     if (!biz) {
       return {
         success: false,
-        error: '无法从URL中提取公众号信息'
+        error: '无法从URL中提取公众号信息，请确保链接是有效的微信公众号文章链接'
       }
     }
 

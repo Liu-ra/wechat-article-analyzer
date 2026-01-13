@@ -1,4 +1,5 @@
 import axios from 'axios'
+import puppeteer from 'puppeteer'
 import { logger } from './logger'
 import { parseCookies, WechatCookies } from './wechatApi'
 
@@ -41,11 +42,58 @@ export interface ArticleFullData {
 
 /**
  * 从文章URL提取公众号biz参数
+ * 支持短链接和长链接
  */
-export function extractBizFromUrl(url: string): string | null {
+export async function extractBizFromUrl(url: string): Promise<string | null> {
   try {
+    logger.info('开始提取biz参数', { url })
+
+    // 先尝试从URL参数中直接提取
     const urlObj = new URL(url)
-    const biz = urlObj.searchParams.get('__biz')
+    let biz = urlObj.searchParams.get('__biz')
+
+    // 如果是短链接，需要通过浏览器访问获取重定向后的完整URL
+    if (!biz && url.includes('/s/')) {
+      logger.info('检测到短链接，正在访问获取完整URL')
+
+      const browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-web-security'
+        ]
+      })
+
+      try {
+        const page = await browser.newPage()
+
+        // 设置User-Agent为微信浏览器
+        await page.setUserAgent(
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.38(0x18002633) NetType/WIFI Language/zh_CN'
+        )
+
+        // 访问短链接
+        await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        })
+
+        // 获取重定向后的URL
+        const finalUrl = page.url()
+        logger.info('获取到重定向后的URL', { finalUrl: finalUrl.substring(0, 150) })
+
+        // 从完整URL中提取biz
+        const finalUrlObj = new URL(finalUrl)
+        biz = finalUrlObj.searchParams.get('__biz')
+
+        await browser.close()
+      } catch (error) {
+        await browser.close()
+        throw error
+      }
+    }
 
     if (!biz) {
       logger.warn('URL中未找到__biz参数', { url })
@@ -55,7 +103,7 @@ export function extractBizFromUrl(url: string): string | null {
     logger.info('成功提取biz参数', { biz: biz.substring(0, 20) })
     return biz
   } catch (error) {
-    logger.error('URL解析失败', { error: error instanceof Error ? error.message : error })
+    logger.error('提取biz参数失败', { error: error instanceof Error ? error.message : error })
     return null
   }
 }
