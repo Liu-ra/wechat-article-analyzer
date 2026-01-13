@@ -33,6 +33,10 @@ const electronAPI = {
   fetchWithCookie: (url: string, cookieString: string) =>
     ipcRenderer.invoke('fetch-with-cookie', url, cookieString),
 
+  // 自动获取 Cookie
+  autoGetCookie: (profileUrl: string) =>
+    ipcRenderer.invoke('auto-get-cookie', profileUrl),
+
   // 批量分析 - 提取公众号信息
   extractAccountInfo: (url: string) =>
     ipcRenderer.invoke('extract-account-info', url),

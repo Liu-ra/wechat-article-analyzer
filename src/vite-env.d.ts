@@ -64,6 +64,14 @@ interface ElectronAPI {
     error?: string
   }>
 
+  autoGetCookie: (profileUrl: string) => Promise<{
+    success: boolean
+    data?: {
+      cookieString: string
+    }
+    error?: string
+  }>
+
   extractAccountInfo: (url: string) => Promise<{
     success: boolean
     data?: {

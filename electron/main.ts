@@ -15,6 +15,7 @@ import {
   ArticleFullData
 } from './services/batchAnalyzer'
 import { exportToExcel, saveExcelFile } from './services/excelExporter'
+import { autoGetCookie } from './services/cookieHelper'
 
 // 开发模式判断
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
@@ -263,6 +264,39 @@ ipcMain.handle('fetch-with-cookie', async (_event, url: string, cookieString: st
     return {
       success: false,
       error: error instanceof Error ? error.message : '获取数据失败'
+    }
+  }
+})
+
+// 自动获取 Cookie
+ipcMain.handle('auto-get-cookie', async (_event, profileUrl: string) => {
+  try {
+    logger.info('开始自动获取 Cookie', { url: profileUrl.substring(0, 100) })
+
+    const cookieString = await autoGetCookie(profileUrl)
+
+    if (!cookieString) {
+      return {
+        success: false,
+        error: '获取 Cookie 失败，可能是超时或窗口被关闭'
+      }
+    }
+
+    logger.info('自动获取 Cookie 成功')
+
+    return {
+      success: true,
+      data: {
+        cookieString
+      }
+    }
+  } catch (error) {
+    logger.error('自动获取 Cookie 失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '自动获取 Cookie 失败'
     }
   }
 })

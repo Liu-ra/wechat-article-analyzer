@@ -57,6 +57,38 @@ export default function BatchAnalyzer({ url, onBack }: BatchAnalyzerProps) {
     }
   }
 
+  // 步骤2：自动获取Cookie
+  const handleAutoGetCookie = async () => {
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      // 调用自动获取Cookie API
+      const result = await window.electronAPI.autoGetCookie(profileUrl)
+
+      if (result.success && result.data) {
+        const obtainedCookie = result.data.cookieString
+        setCookieString(obtainedCookie)
+
+        // 自动验证获取到的Cookie
+        const verifyResult = await window.electronAPI.fetchAccountInfo(biz, obtainedCookie)
+
+        if (verifyResult.success && verifyResult.data) {
+          setAccountInfo(verifyResult.data)
+          setStep('fetchList')
+        } else {
+          setError(verifyResult.error || 'Cookie验证失败')
+        }
+      } else {
+        setError(result.error || '自动获取Cookie失败，请尝试手动粘贴方式')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '自动获取Cookie失败')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   // 步骤2：验证Cookie并获取公众号信息
   const handleVerifyCookie = async () => {
     if (!cookieString.trim()) {
@@ -227,47 +259,74 @@ export default function BatchAnalyzer({ url, onBack }: BatchAnalyzerProps) {
         {/* 步骤2：获取Cookie */}
         {step === 'getCookie' && (
           <div className="space-y-4">
-            <div className="p-6 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-300 rounded-lg">
-              <h3 className="font-semibold text-yellow-900 mb-3 text-lg">
-                📢 重要步骤：获取登录密钥
+            {/* 自动获取Cookie推荐区域 */}
+            <div className="p-6 bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg">
+              <h3 className="font-semibold text-green-900 mb-3 text-lg flex items-center gap-2">
+                <span className="text-2xl">✨</span>
+                <span>方式一：自动获取 Cookie（推荐）</span>
               </h3>
-              <ol className="text-sm text-yellow-800 space-y-3 list-decimal list-inside">
-                <li>点击下方按钮复制公众号历史消息页面链接</li>
-                <li>打开微信，找到"文件传输助手"</li>
-                <li>将复制的链接粘贴并发送给自己</li>
-                <li>点击链接在微信中打开该页面</li>
-                <li>使用抓包工具（如Fiddler）获取 Cookie</li>
-                <li>或从浏览器开发者工具中复制 Cookie</li>
-                <li>将 Cookie 粘贴到下方输入框</li>
-              </ol>
+              <p className="text-sm text-green-800 mb-4">
+                点击下方按钮，将自动打开微信登录窗口。您只需使用微信扫码登录，系统会自动提取 Cookie 并验证，无需手动复制粘贴！
+              </p>
+              <button
+                onClick={handleAutoGetCookie}
+                disabled={isLoading}
+                className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>正在获取...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xl">🚀</span>
+                    <span>一键自动获取 Cookie</span>
+                  </>
+                )}
+              </button>
+            </div>
 
-              <div className="mt-4 flex items-center space-x-3">
+            {/* 手动获取Cookie区域 */}
+            <div className="p-6 bg-gradient-to-r from-gray-50 to-slate-50 border-2 border-gray-300 rounded-lg">
+              <h3 className="font-semibold text-gray-900 mb-3 text-lg flex items-center gap-2">
+                <span className="text-2xl">📋</span>
+                <span>方式二：手动粘贴 Cookie</span>
+              </h3>
+              <p className="text-sm text-gray-600 mb-3">
+                如果自动获取失败，可以手动复制链接到微信中打开，使用抓包工具获取 Cookie
+              </p>
+
+              <div className="flex items-center space-x-3 mb-4">
                 <input
                   type="text"
                   value={profileUrl}
                   readOnly
-                  className="flex-1 px-3 py-2 bg-white border border-yellow-300 rounded text-sm"
+                  className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded text-sm"
                 />
                 <button
                   onClick={() => copyToClipboard(profileUrl)}
-                  className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 text-sm font-medium"
+                  className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm font-medium"
                 >
                   复制链接
                 </button>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                粘贴 Cookie 字符串
-              </label>
-              <textarea
-                value={cookieString}
-                onChange={(e) => setCookieString(e.target.value)}
-                placeholder="从微信或浏览器开发者工具中复制的 Cookie..."
-                className="w-full h-32 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-wechat-green focus:border-transparent resize-none font-mono text-sm"
-                disabled={isLoading}
-              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  粘贴 Cookie 字符串
+                </label>
+                <textarea
+                  value={cookieString}
+                  onChange={(e) => setCookieString(e.target.value)}
+                  placeholder="从微信或浏览器开发者工具中复制的 Cookie..."
+                  className="w-full h-32 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 focus:border-transparent resize-none font-mono text-sm"
+                  disabled={isLoading}
+                />
+              </div>
             </div>
 
             <div className="flex space-x-3">
