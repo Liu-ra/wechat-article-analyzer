@@ -6,7 +6,11 @@ const electronAPI = {
   fetchArticle: (url: string) => ipcRenderer.invoke('fetch-article', url),
 
   // 分析文章
-  analyzeArticle: (content: string) => ipcRenderer.invoke('analyze-article', content),
+  analyzeArticle: (content: string, title?: string) => ipcRenderer.invoke('analyze-article', content, title),
+
+  // 下载文章
+  downloadArticle: (data: { title: string; content: string; format: 'txt' | 'md' }) =>
+    ipcRenderer.invoke('download-article', data),
 
   // 生成PDF（预览）
   generatePDF: (reportData: unknown) => ipcRenderer.invoke('generate-pdf', reportData),
@@ -33,9 +37,75 @@ const electronAPI = {
   fetchWithCookie: (url: string, cookieString: string) =>
     ipcRenderer.invoke('fetch-with-cookie', url, cookieString),
 
-  // 自动获取 Cookie
-  autoGetCookie: (profileUrl: string) =>
-    ipcRenderer.invoke('auto-get-cookie', profileUrl),
+  // 剪贴板监听Cookie
+  startClipboardMonitoring: () =>
+    ipcRenderer.invoke('start-clipboard-monitoring'),
+
+  stopClipboardMonitoring: () =>
+    ipcRenderer.invoke('stop-clipboard-monitoring'),
+
+  onClipboardCookieFound: (callback: (cookieString: string) => void) => {
+    const handler = (_event: unknown, cookieString: string) => callback(cookieString)
+    ipcRenderer.on('clipboard-cookie-found', handler)
+    // 返回清理函数
+    return () => {
+      ipcRenderer.removeListener('clipboard-cookie-found', handler)
+    }
+  },
+
+  onClipboardMonitoringTimeout: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('clipboard-monitoring-timeout', handler)
+    // 返回清理函数
+    return () => {
+      ipcRenderer.removeListener('clipboard-monitoring-timeout', handler)
+    }
+  },
+
+  // 代理服务器监听Cookie
+  startProxyMonitoring: () =>
+    ipcRenderer.invoke('start-proxy-monitoring'),
+
+  stopProxyMonitoring: () =>
+    ipcRenderer.invoke('stop-proxy-monitoring'),
+
+  isProxyRunning: () =>
+    ipcRenderer.invoke('is-proxy-running'),
+
+  onProxyCookieFound: (callback: (cookieString: string) => void) => {
+    const handler = (_event: unknown, cookieString: string) => callback(cookieString)
+    ipcRenderer.on('proxy-cookie-found', handler)
+    // 返回清理函数
+    return () => {
+      ipcRenderer.removeListener('proxy-cookie-found', handler)
+    }
+  },
+
+  // 证书管理
+  installCACertificate: () =>
+    ipcRenderer.invoke('install-ca-certificate'),
+
+  isCACertificateInstalled: () =>
+    ipcRenderer.invoke('is-ca-certificate-installed'),
+
+  uninstallCACertificate: () =>
+    ipcRenderer.invoke('uninstall-ca-certificate'),
+
+  // 一键自动监听Cookie
+  autoStartCookieMonitoring: () =>
+    ipcRenderer.invoke('auto-start-cookie-monitoring'),
+
+  autoStopCookieMonitoring: () =>
+    ipcRenderer.invoke('auto-stop-cookie-monitoring'),
+
+  onAutoCookieFound: (callback: (cookieString: string) => void) => {
+    const handler = (_event: unknown, cookieString: string) => callback(cookieString)
+    ipcRenderer.on('auto-cookie-found', handler)
+    // 返回清理函数
+    return () => {
+      ipcRenderer.removeListener('auto-cookie-found', handler)
+    }
+  },
 
   // 批量分析 - 提取公众号信息
   extractAccountInfo: (url: string) =>
@@ -55,7 +125,15 @@ const electronAPI = {
 
   // 批量分析 - 导出Excel
   exportExcel: (articles: unknown[], accountName: string) =>
-    ipcRenderer.invoke('export-excel', articles, accountName)
+    ipcRenderer.invoke('export-excel', articles, accountName),
+
+  // 批量下载文章内容
+  downloadArticlesContent: (
+    articles: unknown[],
+    accountName: string,
+    formats: ('html' | 'pdf' | 'word')[],
+    cookieString?: string
+  ) => ipcRenderer.invoke('download-articles-content', articles, accountName, formats, cookieString)
 }
 
 // 暴露到渲染进程

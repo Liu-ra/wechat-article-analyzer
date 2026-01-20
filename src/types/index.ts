@@ -22,11 +22,42 @@ export interface ArticleStats {
   isManualInput: boolean
 }
 
-// NLP 分析结果
+// 文章优点
+export interface ArticleStrength {
+  title: string
+  description: string
+}
+
+// 文章缺点
+export interface ArticleWeakness {
+  title: string
+  description: string
+  suggestion: string
+}
+
+// 配图建议
+export interface ImageSuggestion {
+  position: string  // 建议配图位置（如：开头、某段落后）
+  type: string      // 图片类型（如：数据图表、场景图、人物图）
+  description: string  // 图片内容描述
+}
+
+// NLP 分析结果（新版）
 export interface AnalysisResult {
+  // 文章优点
+  strengths: ArticleStrength[]
+  // 文章缺点
+  weaknesses: ArticleWeakness[]
+  // 配图建议
+  imageSuggestions: ImageSuggestion[]
+  // 重写后的文章标题
+  newTitle: string
+  // 重写后的文章内容
+  newContent: string
+  // 关键词（保留）
   keywords: KeywordItem[]
+  // 摘要（保留）
   summary: string
-  sentiment: SentimentResult
 }
 
 // 关键词项
@@ -35,7 +66,7 @@ export interface KeywordItem {
   weight: number
 }
 
-// 情感分析结果
+// 情感分析结果（保留兼容）
 export interface SentimentResult {
   score: number  // -1 到 1，负面到正面
   label: 'positive' | 'negative' | 'neutral'

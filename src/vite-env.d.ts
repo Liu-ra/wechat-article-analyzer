@@ -10,9 +10,15 @@ interface ElectronAPI {
     error?: string
   }>
 
-  analyzeArticle: (content: string) => Promise<{
+  analyzeArticle: (content: string, title?: string) => Promise<{
     success: boolean
     data?: import('./types').AnalysisResult
+    error?: string
+  }>
+
+  downloadArticle: (data: { title: string; content: string; format: 'txt' | 'md' }) => Promise<{
+    success: boolean
+    path?: string
     error?: string
   }>
 
@@ -64,13 +70,78 @@ interface ElectronAPI {
     error?: string
   }>
 
-  autoGetCookie: (profileUrl: string) => Promise<{
+  startClipboardMonitoring: () => Promise<{
+    success: boolean
+    error?: string
+  }>
+
+  stopClipboardMonitoring: () => Promise<{
+    success: boolean
+    error?: string
+  }>
+
+  onClipboardCookieFound: (callback: (cookieString: string) => void) => () => void
+
+  onClipboardMonitoringTimeout: (callback: () => void) => () => void
+
+  startProxyMonitoring: () => Promise<{
     success: boolean
     data?: {
-      cookieString: string
+      port: number
+      proxyUrl: string
     }
     error?: string
   }>
+
+  stopProxyMonitoring: () => Promise<{
+    success: boolean
+    error?: string
+  }>
+
+  isProxyRunning: () => Promise<{
+    success: boolean
+    data?: {
+      isRunning: boolean
+    }
+  }>
+
+  onProxyCookieFound: (callback: (cookieString: string) => void) => () => void
+
+  installCACertificate: () => Promise<{
+    success: boolean
+    message?: string
+    error?: string
+  }>
+
+  isCACertificateInstalled: () => Promise<{
+    success: boolean
+    data?: {
+      isInstalled: boolean
+    }
+    error?: string
+  }>
+
+  uninstallCACertificate: () => Promise<{
+    success: boolean
+    message?: string
+    error?: string
+  }>
+
+  autoStartCookieMonitoring: () => Promise<{
+    success: boolean
+    data?: {
+      port: number
+      proxyUrl: string
+    }
+    error?: string
+  }>
+
+  autoStopCookieMonitoring: () => Promise<{
+    success: boolean
+    error?: string
+  }>
+
+  onAutoCookieFound: (callback: (cookieString: string) => void) => () => void
 
   extractAccountInfo: (url: string) => Promise<{
     success: boolean
@@ -130,6 +201,21 @@ interface ElectronAPI {
   exportExcel: (articles: any[], accountName: string) => Promise<{
     success: boolean
     path?: string
+    error?: string
+  }>
+
+  downloadArticlesContent: (
+    articles: any[],
+    accountName: string,
+    formats: ('html' | 'pdf' | 'word')[],
+    cookieString?: string
+  ) => Promise<{
+    success: boolean
+    data?: {
+      outputDir: string
+      downloadedCount: number
+      errors: string[]
+    }
     error?: string
   }>
 }

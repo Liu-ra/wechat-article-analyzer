@@ -226,13 +226,18 @@ export async function fetchArticleStats(
  */
 export async function validateCookies(cookies: WechatCookies): Promise<boolean> {
   try {
-    // 简单验证：检查必需的字段
-    if (!cookies.key && !cookies.appmsg_token) {
-      logger.warn('Cookie 缺少必需字段')
+    // 基本验证：至少需要 pass_ticket 或 wap_sid2
+    if (!cookies.pass_ticket && !cookies.wap_sid2) {
+      logger.warn('Cookie 缺少基本认证字段 (pass_ticket 或 wap_sid2)')
       return false
     }
 
-    logger.info('Cookie 验证通过')
+    // 警告：如果缺少 key 或 appmsg_token，获取文章列表可能会失败
+    if (!cookies.key && !cookies.appmsg_token) {
+      logger.warn('Cookie 缺少 key 或 appmsg_token，获取文章列表时可能需要这些字段')
+    }
+
+    logger.info('Cookie 基本验证通过')
     return true
   } catch (error) {
     logger.error('Cookie 验证失败', { error })

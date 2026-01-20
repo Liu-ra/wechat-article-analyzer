@@ -347,18 +347,45 @@ export async function scrapeArticle(url: string): Promise<ScrapeResult> {
       const content = contentEl?.textContent?.trim() || ''
       const htmlContent = contentEl?.innerHTML || ''
 
-      // 图片 - 获取所有图片 URL
+      // 图片 - 获取所有图片 URL（优先 data-src，微信使用懒加载）
       const imageEls = contentEl?.querySelectorAll('img') || []
       const imageUrls: string[] = []
+      const debugImgInfo: { dataSrc: string | null; src: string | null; finalUrl: string | null }[] = []
+
       imageEls.forEach(img => {
-        const src = img.getAttribute('data-src') || img.getAttribute('src')
-        if (src && !src.startsWith('data:')) {
-          imageUrls.push(src)
+        const dataSrc = img.getAttribute('data-src')
+        const src = img.getAttribute('src')
+
+        // 优先使用 data-src（懒加载原始URL），否则用 src
+        let url = dataSrc || src
+        let finalUrl: string | null = null
+
+        if (url && !url.startsWith('data:')) {
+          // 解码 HTML 实体
+          url = url.replace(/&amp;/g, '&')
+          finalUrl = url
+          imageUrls.push(url)
         }
+
+        // 记录完整的 URL 用于调试
+        debugImgInfo.push({
+          dataSrc: dataSrc || null,
+          src: src?.startsWith('data:') ? '[SVG placeholder]' : (src || null),
+          finalUrl
+        })
       })
 
       // 字数统计
       const wordCount = content.replace(/\s/g, '').length
+
+      // 调试信息
+      const debugInfo = {
+        contentElExists: !!contentEl,
+        contentLength: htmlContent.length,
+        imageElsCount: imageEls.length,
+        imageUrlsCount: imageUrls.length,
+        imgDetails: debugImgInfo
+      }
 
       return {
         title,
@@ -367,9 +394,13 @@ export async function scrapeArticle(url: string): Promise<ScrapeResult> {
         content,
         htmlContent,
         imageUrls,
-        wordCount
+        wordCount,
+        debugInfo
       }
     })
+
+    // 输出调试信息
+    logger.info('图片提取调试信息', articleData.debugInfo)
 
     // 将图片转换为 base64，避免防盗链问题
     logger.info('开始转换图片', { count: articleData.imageUrls.length })
@@ -442,6 +473,49 @@ export async function scrapeArticle(url: string): Promise<ScrapeResult> {
       converted: images.length,
       base64Count: images.filter(img => img.startsWith('data:')).length
     })
+
+    // 将 htmlContent 中的图片 URL 替换为 base64
+    let processedHtmlContent = articleData.htmlContent
+    let replacedCount = 0
+    for (let i = 0; i < Math.min(articleData.imageUrls.length, images.length); i++) {
+      const originalUrl = articleData.imageUrls[i]
+      const base64Image = images[i]
+      if (base64Image.startsWith('data:')) {
+        // 转义 URL 中的特殊字符用于正则匹配
+        const escapedUrl = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        // HTML 中的 URL 可能使用 &amp; 编码
+        const escapedUrlEncoded = originalUrl.replace(/&/g, '&amp;').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+        const beforeLength = processedHtmlContent.length
+
+        // 替换 src 属性（解码版本）
+        processedHtmlContent = processedHtmlContent.replace(
+          new RegExp(`(src=["'])${escapedUrl}(["'])`, 'g'),
+          `$1${base64Image}$2`
+        )
+        // 替换 src 属性（HTML编码版本）
+        processedHtmlContent = processedHtmlContent.replace(
+          new RegExp(`(src=["'])${escapedUrlEncoded}(["'])`, 'g'),
+          `$1${base64Image}$2`
+        )
+        // 替换 data-src 属性（解码版本）
+        processedHtmlContent = processedHtmlContent.replace(
+          new RegExp(`(data-src=["'])${escapedUrl}(["'])`, 'g'),
+          `$1${base64Image}$2`
+        )
+        // 替换 data-src 属性（HTML编码版本）
+        processedHtmlContent = processedHtmlContent.replace(
+          new RegExp(`(data-src=["'])${escapedUrlEncoded}(["'])`, 'g'),
+          `$1${base64Image}$2`
+        )
+
+        if (processedHtmlContent.length !== beforeLength) {
+          replacedCount++
+        }
+      }
+    }
+    articleData.htmlContent = processedHtmlContent
+    logger.info('HTML中的图片URL已替换为base64', { replacedCount, totalImages: images.length })
 
     // 尝试获取阅读量等数据
     logger.info('开始提取统计数据')
@@ -557,6 +631,17 @@ export async function scrapeArticle(url: string): Promise<ScrapeResult> {
     } else {
       logger.warn('未拦截到任何 API 请求')
     }
+
+    // 验证 images 数组内容
+    logger.info('验证 images 数组', {
+      length: images.length,
+      types: images.map((img, i) => ({
+        index: i,
+        isBase64: img.startsWith('data:'),
+        prefix: img.substring(0, 30),
+        size: img.length
+      }))
+    })
 
     const result = {
       article: {

@@ -15,12 +15,55 @@ import {
   ArticleFullData
 } from './services/batchAnalyzer'
 import { exportToExcel, saveExcelFile } from './services/excelExporter'
-import { autoGetCookie } from './services/cookieHelper'
+import { downloadArticlesContent, DownloadFormat } from './services/contentDownloader'
+import { startClipboardMonitoring } from './services/cookieHelper'
+import { startProxyServer, stopProxyServer, isProxyRunning, getCACertPath } from './services/proxyServer'
+import {
+  installCACertificateToSystem,
+  uninstallCACertificateFromSystem,
+  isCACertificateInstalled
+} from './services/certificateManager'
+import { enableSystemProxy, disableSystemProxy, getProxyStatus } from './services/systemProxy'
 
 // 开发模式判断
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
+
+// 全局保存的 Cookie（用于自动获取统计数据）
+let savedCookieString: string | null = null
+
+// 保存 Cookie 到文件（持久化）
+function saveCookieToFile(cookieString: string) {
+  try {
+    const userDataPath = app.getPath('userData')
+    const cookiePath = path.join(userDataPath, 'saved-cookie.txt')
+    fs.writeFileSync(cookiePath, cookieString, 'utf-8')
+    savedCookieString = cookieString
+    logger.info('Cookie 已保存', { path: cookiePath })
+  } catch (error) {
+    logger.error('保存 Cookie 失败', { error })
+  }
+}
+
+// 从文件加载 Cookie
+function loadCookieFromFile(): string | null {
+  try {
+    const userDataPath = app.getPath('userData')
+    const cookiePath = path.join(userDataPath, 'saved-cookie.txt')
+    if (fs.existsSync(cookiePath)) {
+      const cookie = fs.readFileSync(cookiePath, 'utf-8')
+      if (cookie && cookie.trim()) {
+        savedCookieString = cookie
+        logger.info('已加载保存的 Cookie')
+        return cookie
+      }
+    }
+  } catch (error) {
+    logger.debug('加载 Cookie 失败', { error })
+  }
+  return null
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -56,6 +99,20 @@ function createWindow() {
 
 // 应用启动
 app.whenReady().then(() => {
+  // 加载保存的 Cookie
+  loadCookieFromFile()
+
+  // 设置 CSP 允许 data: URL 用于图片
+  const { session } = require('electron')
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': ["default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; font-src 'self' data:;"]
+      }
+    })
+  })
+
   createWindow()
 
   app.on('activate', () => {
@@ -88,15 +145,63 @@ ipcMain.handle('fetch-article', async (_event, url: string) => {
 })
 
 // 分析文章
-ipcMain.handle('analyze-article', async (_event, content: string) => {
+ipcMain.handle('analyze-article', async (_event, content: string, title?: string) => {
   try {
-    const result = await analyzeContent(content)
+    const result = await analyzeContent(content, title)
     return { success: true, data: result }
   } catch (error) {
     console.error('分析文章失败:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : '分析文章失败'
+    }
+  }
+})
+
+// 下载文章
+ipcMain.handle('download-article', async (_event, data: { title: string; content: string; format: 'txt' | 'md' }) => {
+  try {
+    const { title, content, format } = data
+
+    // 清理文件名中的非法字符
+    const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_').substring(0, 100)
+
+    // 根据格式生成内容
+    let fileContent: string
+    let extension: string
+    let filterName: string
+
+    if (format === 'md') {
+      fileContent = `# ${title}\n\n${content}`
+      extension = 'md'
+      filterName = 'Markdown文件'
+    } else {
+      fileContent = `${title}\n${'='.repeat(title.length)}\n\n${content}`
+      extension = 'txt'
+      filterName = '文本文件'
+    }
+
+    // 弹出保存对话框
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: '下载文章',
+      defaultPath: `${safeTitle}.${extension}`,
+      filters: [{ name: filterName, extensions: [extension] }]
+    })
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, error: '取消下载' }
+    }
+
+    // 写入文件
+    fs.writeFileSync(result.filePath, fileContent, 'utf-8')
+    logger.info('文章下载成功', { path: result.filePath, format })
+
+    return { success: true, path: result.filePath }
+  } catch (error) {
+    console.error('下载文章失败:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '下载文章失败'
     }
   }
 })
@@ -243,6 +348,11 @@ ipcMain.handle('fetch-with-cookie', async (_event, url: string, cookieString: st
 
     logger.info('Cookie 方式获取数据成功', stats)
 
+    // 保存有效的 Cookie 供后续使用
+    if (stats.readCount !== null || stats.likeCount !== null) {
+      saveCookieToFile(cookieString)
+    }
+
     return {
       success: true,
       data: {
@@ -268,35 +378,206 @@ ipcMain.handle('fetch-with-cookie', async (_event, url: string, cookieString: st
   }
 })
 
-// 自动获取 Cookie
-ipcMain.handle('auto-get-cookie', async (_event, profileUrl: string) => {
+// 剪贴板监听Cookie
+let clipboardMonitoringStop: (() => void) | null = null
+
+ipcMain.handle('start-clipboard-monitoring', async (event) => {
   try {
-    logger.info('开始自动获取 Cookie', { url: profileUrl.substring(0, 100) })
+    logger.info('开始监听剪贴板获取 Cookie')
 
-    const cookieString = await autoGetCookie(profileUrl)
-
-    if (!cookieString) {
-      return {
-        success: false,
-        error: '获取 Cookie 失败，可能是超时或窗口被关闭'
-      }
+    // 如果已经在监听，先停止
+    if (clipboardMonitoringStop) {
+      clipboardMonitoringStop()
     }
 
-    logger.info('自动获取 Cookie 成功')
+    // 开始监听
+    clipboardMonitoringStop = startClipboardMonitoring(
+      (cookieString) => {
+        // 检测到Cookie，发送给渲染进程
+        logger.info('剪贴板检测到 Cookie')
+        event.sender.send('clipboard-cookie-found', cookieString)
+        clipboardMonitoringStop = null
+      },
+      () => {
+        // 超时或取消
+        logger.warn('剪贴板监听超时')
+        event.sender.send('clipboard-monitoring-timeout')
+        clipboardMonitoringStop = null
+      }
+    )
 
     return {
-      success: true,
-      data: {
-        cookieString
-      }
+      success: true
     }
   } catch (error) {
-    logger.error('自动获取 Cookie 失败', {
+    logger.error('启动剪贴板监听失败', {
       error: error instanceof Error ? error.message : String(error)
     })
     return {
       success: false,
-      error: error instanceof Error ? error.message : '自动获取 Cookie 失败'
+      error: error instanceof Error ? error.message : '启动剪贴板监听失败'
+    }
+  }
+})
+
+ipcMain.handle('stop-clipboard-monitoring', async () => {
+  try {
+    if (clipboardMonitoringStop) {
+      clipboardMonitoringStop()
+      clipboardMonitoringStop = null
+      logger.info('停止剪贴板监听')
+    }
+
+    return {
+      success: true
+    }
+  } catch (error) {
+    logger.error('停止剪贴板监听失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '停止剪贴板监听失败'
+    }
+  }
+})
+
+// 代理服务器监听Cookie
+ipcMain.handle('start-proxy-monitoring', async (event) => {
+  try {
+    logger.info('启动代理服务器监听Cookie')
+
+    const PROXY_PORT = 8899
+
+    await startProxyServer({
+      port: PROXY_PORT,
+      onCookieFound: (cookieString) => {
+        logger.info('代理服务器捕获到Cookie')
+        event.sender.send('proxy-cookie-found', cookieString)
+      }
+    })
+
+    return {
+      success: true,
+      data: {
+        port: PROXY_PORT,
+        proxyUrl: `127.0.0.1:${PROXY_PORT}`
+      }
+    }
+  } catch (error) {
+    logger.error('启动代理服务器失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '启动代理服务器失败'
+    }
+  }
+})
+
+ipcMain.handle('stop-proxy-monitoring', async () => {
+  try {
+    await stopProxyServer()
+    logger.info('代理服务器已停止')
+
+    return {
+      success: true
+    }
+  } catch (error) {
+    logger.error('停止代理服务器失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '停止代理服务器失败'
+    }
+  }
+})
+
+ipcMain.handle('is-proxy-running', async () => {
+  return {
+    success: true,
+    data: {
+      isRunning: isProxyRunning()
+    }
+  }
+})
+
+// 证书管理
+ipcMain.handle('install-ca-certificate', async () => {
+  try {
+    logger.info('开始安装CA证书')
+
+    const certPath = getCACertPath()
+    const success = await installCACertificateToSystem(certPath)
+
+    if (success) {
+      return {
+        success: true,
+        message: 'CA证书安装成功'
+      }
+    } else {
+      return {
+        success: false,
+        error: 'CA证书安装失败，请以管理员身份运行应用'
+      }
+    }
+  } catch (error) {
+    logger.error('安装CA证书失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '安装CA证书失败'
+    }
+  }
+})
+
+ipcMain.handle('is-ca-certificate-installed', async () => {
+  try {
+    const isInstalled = await isCACertificateInstalled()
+
+    return {
+      success: true,
+      data: {
+        isInstalled
+      }
+    }
+  } catch (error) {
+    logger.error('检查CA证书状态失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '检查证书状态失败'
+    }
+  }
+})
+
+ipcMain.handle('uninstall-ca-certificate', async () => {
+  try {
+    logger.info('开始卸载CA证书')
+
+    const success = await uninstallCACertificateFromSystem()
+
+    if (success) {
+      return {
+        success: true,
+        message: 'CA证书卸载成功'
+      }
+    } else {
+      return {
+        success: false,
+        error: 'CA证书卸载失败'
+      }
+    }
+  } catch (error) {
+    logger.error('卸载CA证书失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '卸载CA证书失败'
     }
   }
 })
@@ -355,6 +636,9 @@ ipcMain.handle('fetch-account-info', async (_event, biz: string, cookieString: s
         error: '获取公众号信息失败'
       }
     }
+
+    // 批量分析成功，保存 Cookie 供单篇分析使用
+    saveCookieToFile(cookieString)
 
     return {
       success: true,
@@ -444,6 +728,203 @@ ipcMain.handle('export-excel', async (_event, articles: ArticleFullData[], accou
     return {
       success: false,
       error: error instanceof Error ? error.message : '导出失败'
+    }
+  }
+})
+
+// 一键自动监听Cookie（自动完成所有设置）
+let originalProxySettings: { enabled: boolean; server: string | null } | null = null
+
+ipcMain.handle('auto-start-cookie-monitoring', async (event) => {
+  try {
+    logger.info('开始一键自动监听Cookie')
+
+    const PROXY_PORT = 8899
+    const PROXY_ADDRESS = `127.0.0.1:${PROXY_PORT}`
+
+    // 步骤0: 检查代理是否已在运行，如果是则先停止
+    if (isProxyRunning()) {
+      logger.info('检测到代理服务器已在运行，先停止')
+      await stopProxyServer()
+      // 等待一下确保完全停止
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+
+    // 步骤1: 检查并安装CA证书
+    const isInstalled = await isCACertificateInstalled()
+    if (!isInstalled) {
+      logger.info('CA证书未安装，开始自动安装')
+      const certPath = getCACertPath()
+      const installSuccess = await installCACertificateToSystem(certPath)
+
+      if (!installSuccess) {
+        return {
+          success: false,
+          error: '自动安装CA证书失败，请以管理员身份运行应用'
+        }
+      }
+      logger.info('CA证书自动安装成功')
+    }
+
+    // 步骤2: 保存当前代理设置（在启动代理服务器之前）
+    originalProxySettings = await getProxyStatus()
+    logger.info('已保存原始代理设置', originalProxySettings)
+
+    // 步骤3: 启动代理服务器
+    await startProxyServer({
+      port: PROXY_PORT,
+      onCookieFound: (cookieString) => {
+        logger.info('代理服务器捕获到Cookie')
+        event.sender.send('auto-cookie-found', cookieString)
+      }
+    })
+
+    // 步骤4: 设置系统代理
+    const proxySetSuccess = await enableSystemProxy(PROXY_ADDRESS)
+    if (!proxySetSuccess) {
+      await stopProxyServer()
+      return {
+        success: false,
+        error: '自动设置系统代理失败'
+      }
+    }
+
+    logger.info('一键自动监听Cookie启动成功')
+
+    return {
+      success: true,
+      data: {
+        port: PROXY_PORT,
+        proxyUrl: PROXY_ADDRESS
+      }
+    }
+  } catch (error) {
+    logger.error('一键自动监听Cookie失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+
+    // 清理：停止代理并恢复原始设置
+    try {
+      if (isProxyRunning()) {
+        await stopProxyServer()
+        logger.info('清理：代理服务器已停止')
+      }
+
+      if (originalProxySettings) {
+        logger.info('清理：恢复原始代理设置', originalProxySettings)
+        if (originalProxySettings.enabled && originalProxySettings.server) {
+          await enableSystemProxy(originalProxySettings.server)
+          logger.info('✓ 已恢复原始代理设置')
+        } else {
+          await disableSystemProxy()
+          logger.info('✓ 已禁用系统代理')
+        }
+        originalProxySettings = null
+      }
+    } catch (cleanupError) {
+      logger.error('清理失败', { error: cleanupError })
+    }
+
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '启动失败'
+    }
+  }
+})
+
+ipcMain.handle('auto-stop-cookie-monitoring', async () => {
+  try {
+    logger.info('停止一键自动监听Cookie')
+
+    // 步骤1: 先恢复原始代理设置（重要！先恢复再停止服务器）
+    if (originalProxySettings) {
+      logger.info('准备恢复原始代理设置', originalProxySettings)
+      try {
+        if (originalProxySettings.enabled && originalProxySettings.server) {
+          await enableSystemProxy(originalProxySettings.server)
+          logger.info('✓ 已恢复原始代理设置', originalProxySettings)
+        } else {
+          await disableSystemProxy()
+          logger.info('✓ 已禁用系统代理（原本未启用）')
+        }
+      } catch (proxyErr) {
+        logger.error('恢复代理设置失败', { error: proxyErr })
+      }
+      originalProxySettings = null
+    } else {
+      logger.warn('没有保存的原始代理设置，跳过恢复')
+    }
+
+    // 步骤2: 停止代理服务器
+    if (isProxyRunning()) {
+      logger.info('开始停止代理服务器')
+      await stopProxyServer()
+      logger.info('✓ 代理服务器已停止')
+    } else {
+      logger.info('代理服务器未运行，跳过停止')
+    }
+
+    logger.info('✓ 一键自动监听Cookie已完全停止')
+
+    return {
+      success: true
+    }
+  } catch (error) {
+    logger.error('停止一键自动监听Cookie失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '停止失败'
+    }
+  }
+})
+
+// 批量下载文章内容
+ipcMain.handle('download-articles-content', async (
+  _event,
+  articles: { title: string; url: string; cover: string; digest: string; publishTime: number; author: string }[],
+  accountName: string,
+  formats: DownloadFormat[],
+  cookieString?: string
+) => {
+  try {
+    logger.info('开始批量下载文章内容', {
+      articleCount: articles.length,
+      accountName,
+      formats,
+      hasCookie: !!cookieString
+    })
+
+    const result = await downloadArticlesContent(
+      articles as any,
+      accountName,
+      formats,
+      cookieString
+    )
+
+    if (result.success) {
+      return {
+        success: true,
+        data: {
+          outputDir: result.outputDir,
+          downloadedCount: result.downloadedCount,
+          errors: result.errors
+        }
+      }
+    } else {
+      return {
+        success: false,
+        error: result.errors[0] || '下载失败'
+      }
+    }
+  } catch (error) {
+    logger.error('批量下载文章内容失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '下载失败'
     }
   }
 })

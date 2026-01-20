@@ -1,12 +1,9 @@
 import { useState, useCallback } from 'react'
-import { AppState, ArticleStats } from './types'
+import { AppState } from './types'
 import UrlInput from './components/UrlInput'
 import ArticlePreview from './components/ArticlePreview'
-import StatsInput from './components/StatsInput'
 import AnalysisResultView from './components/AnalysisResult'
-import ReportPreview from './components/ReportPreview'
 import LogViewer from './components/LogViewer'
-import CookieInput from './components/CookieInput'
 import BatchAnalyzer from './components/BatchAnalyzer'
 
 // 初始状态
@@ -23,9 +20,11 @@ function App() {
   const [state, setState] = useState<AppState>(initialState)
   const [currentStep, setCurrentStep] = useState<number>(1)
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false)
-  const [isCookieInputOpen, setIsCookieInputOpen] = useState(false)
   const [isBatchMode, setIsBatchMode] = useState(false)
   const [batchUrl, setBatchUrl] = useState('')
+  // 编辑后的文章内容
+  const [editedTitle, setEditedTitle] = useState('')
+  const [editedContent, setEditedContent] = useState('')
 
   // 处理URL提交
   const handleUrlSubmit = useCallback(async (url: string, mode: 'single' | 'batch' = 'single') => {
@@ -42,24 +41,12 @@ function App() {
       const result = await window.electronAPI.fetchArticle(url)
 
       if (result.success && result.data) {
-        // 检查是否真正获取到了数据
-        const stats = result.data.stats
-        const hasAnyData = stats && (
-          stats.readCount !== null ||
-          stats.likeCount !== null ||
-          stats.wowCount !== null ||
-          stats.shareCount !== null ||
-          stats.favoriteCount !== null ||
-          stats.commentCount !== null
-        )
-
         setState(prev => ({
           ...prev,
           fetchStatus: 'success',
           article: result.data!.article,
-          stats: result.data!.stats,
-          // 如果没有获取到任何数据，设置一个警告信息
-          error: !hasAnyData ? '文章抓取成功，但未获取到互动数据。您可以手动输入或使用 Cookie 方式获取。' : null
+          stats: null,
+          error: null
         }))
         setCurrentStep(2)
       } else {
@@ -78,24 +65,6 @@ function App() {
     }
   }, [])
 
-  // 更新统计数据
-  const handleStatsUpdate = useCallback((stats: ArticleStats) => {
-    setState(prev => ({ ...prev, stats }))
-  }, [])
-
-  // 使用 Cookie 获取数据成功
-  const handleCookieSuccess = useCallback((stats: ArticleStats) => {
-    setState(prev => ({
-      ...prev,
-      stats: {
-        ...prev.stats,
-        ...stats,
-        isManualInput: false
-      }
-    }))
-    setIsCookieInputOpen(false)
-  }, [])
-
   // 开始分析
   const handleAnalyze = useCallback(async () => {
     if (!state.article) return
@@ -103,7 +72,7 @@ function App() {
     setState(prev => ({ ...prev, fetchStatus: 'fetching' }))
 
     try {
-      const result = await window.electronAPI.analyzeArticle(state.article.content)
+      const result = await window.electronAPI.analyzeArticle(state.article.content, state.article.title)
 
       if (result.success && result.data) {
         setState(prev => ({
@@ -111,6 +80,9 @@ function App() {
           fetchStatus: 'success',
           analysis: result.data!
         }))
+        // 初始化编辑内容
+        setEditedTitle(result.data!.newTitle)
+        setEditedContent(result.data!.newContent)
         setCurrentStep(3)
       } else {
         setState(prev => ({
@@ -128,61 +100,83 @@ function App() {
     }
   }, [state.article])
 
-  // 生成报告
-  const handleGenerateReport = useCallback(async () => {
-    if (!state.article || !state.stats || !state.analysis) return
+  // 处理内容编辑
+  const handleContentChange = useCallback((newTitle: string, newContent: string) => {
+    setEditedTitle(newTitle)
+    setEditedContent(newContent)
+  }, [])
 
+  // 进入下载步骤
+  const handleGoToDownload = useCallback(() => {
+    setCurrentStep(4)
+  }, [])
+
+  // 下载文章为TXT
+  const handleDownloadTxt = useCallback(async () => {
     try {
-      const reportData = {
-        article: state.article,
-        stats: state.stats,
-        analysis: state.analysis,
-        generatedAt: new Date().toISOString()
-      }
+      const result = await window.electronAPI.downloadArticle({
+        title: editedTitle,
+        content: editedContent,
+        format: 'txt'
+      })
 
-      const result = await window.electronAPI.generatePDF(reportData)
-
-      if (result.success) {
-        setCurrentStep(4)
-      } else {
+      if (!result.success) {
         setState(prev => ({
           ...prev,
-          error: result.error || '生成报告失败'
+          error: result.error || '下载失败'
         }))
       }
     } catch (error) {
       setState(prev => ({
         ...prev,
-        error: error instanceof Error ? error.message : '生成报告失败'
+        error: error instanceof Error ? error.message : '下载失败'
       }))
     }
-  }, [state.article, state.stats, state.analysis])
+  }, [editedTitle, editedContent])
 
-  // 导出PDF
-  const handleExportPDF = useCallback(async () => {
-    if (!state.article || !state.stats || !state.analysis) return
+  // 下载文章为Markdown
+  const handleDownloadMarkdown = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.downloadArticle({
+        title: editedTitle,
+        content: editedContent,
+        format: 'md'
+      })
 
-    const reportData = {
-      article: state.article,
-      stats: state.stats,
-      analysis: state.analysis,
-      generatedAt: new Date().toISOString()
-    }
-
-    const result = await window.electronAPI.exportPDF(reportData)
-
-    if (!result.success) {
+      if (!result.success) {
+        setState(prev => ({
+          ...prev,
+          error: result.error || '下载失败'
+        }))
+      }
+    } catch (error) {
       setState(prev => ({
         ...prev,
-        error: result.error || '导出失败'
+        error: error instanceof Error ? error.message : '下载失败'
       }))
     }
-  }, [state.article, state.stats, state.analysis])
+  }, [editedTitle, editedContent])
+
+  // 复制到剪贴板
+  const handleCopyToClipboard = useCallback(async () => {
+    try {
+      const fullContent = `# ${editedTitle}\n\n${editedContent}`
+      await navigator.clipboard.writeText(fullContent)
+      // 可以添加成功提示
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        error: '复制失败，请手动复制'
+      }))
+    }
+  }, [editedTitle, editedContent])
 
   // 重置
   const handleReset = useCallback(() => {
     setState(initialState)
     setCurrentStep(1)
+    setEditedTitle('')
+    setEditedContent('')
   }, [])
 
   // 退出批量模式
@@ -208,7 +202,7 @@ function App() {
               >
                 查看日志
               </button>
-              <span className="text-sm text-gray-500">V1.0</span>
+              <span className="text-sm text-gray-500">V2.0.0</span>
             </div>
           </div>
         </div>
@@ -219,9 +213,9 @@ function App() {
         <div className="flex items-center justify-center space-x-4">
           {[
             { step: 1, label: '输入链接' },
-            { step: 2, label: '数据确认' },
-            { step: 3, label: '分析结果' },
-            { step: 4, label: '导出报告' }
+            { step: 2, label: '文章预览' },
+            { step: 3, label: '分析优化' },
+            { step: 4, label: '下载文章' }
           ].map((item, index) => (
             <div key={item.step} className="flex items-center">
               <div className={`
@@ -253,126 +247,126 @@ function App() {
         {/* 单篇分析模式 */}
         {!isBatchMode && (
           <>
-            {/* 错误/警告提示 */}
+            {/* 错误提示 */}
             {state.error && (
-          <div className={`mb-6 p-4 rounded-lg ${
-            state.error.includes('未获取到互动数据')
-              ? 'bg-yellow-50 border border-yellow-200 text-yellow-800'
-              : 'bg-red-50 border border-red-200 text-red-700'
-          }`}>
-            <div className="flex items-start">
-              <span className="flex-1">{state.error}</span>
-              <button
-                onClick={() => setState(prev => ({ ...prev, error: null }))}
-                className="ml-4 text-sm underline flex-shrink-0"
-              >
-                关闭
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 步骤1: URL输入 */}
-        {currentStep === 1 && (
-          <UrlInput
-            onSubmit={handleUrlSubmit}
-            isLoading={state.fetchStatus === 'fetching'}
-          />
-        )}
-
-        {/* 步骤2: 文章预览和数据确认 */}
-        {currentStep === 2 && state.article && (
-          <div className="space-y-6">
-            <ArticlePreview article={state.article} />
-
-            {/* Cookie 获取提示 */}
-            {(!state.stats ||
-              (state.stats.readCount === null &&
-               state.stats.likeCount === null &&
-               state.stats.wowCount === null &&
-               state.stats.shareCount === null &&
-               state.stats.favoriteCount === null &&
-               state.stats.commentCount === null)) && (
-              <div className="p-5 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-300 rounded-lg shadow-sm">
+              <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-200 text-red-700">
                 <div className="flex items-start">
-                  <div className="flex-shrink-0 text-2xl mr-3">⚠️</div>
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-yellow-900 mb-2 text-lg">未获取到互动数据</h3>
-                    <p className="text-sm text-yellow-800 mb-3">
-                      由于微信的反爬虫机制，自动抓取可能无法获取文章的阅读量、点赞数等互动数据。
-                      您可以选择以下方式：
-                    </p>
-                    <div className="flex items-center space-x-3">
-                      <button
-                        onClick={() => setIsCookieInputOpen(true)}
-                        className="px-5 py-2.5 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors text-sm font-medium shadow-sm hover:shadow"
-                      >
-                        🔑 使用 Cookie 获取数据
-                      </button>
-                      <span className="text-xs text-yellow-700">或在下方手动输入数据</span>
-                    </div>
-                  </div>
+                  <span className="flex-1">{state.error}</span>
+                  <button
+                    onClick={() => setState(prev => ({ ...prev, error: null }))}
+                    className="ml-4 text-sm underline flex-shrink-0"
+                  >
+                    关闭
+                  </button>
                 </div>
               </div>
             )}
 
-            <StatsInput
-              stats={state.stats}
-              onUpdate={handleStatsUpdate}
-            />
-            <div className="flex justify-between">
-              <button onClick={handleReset} className="btn-secondary">
-                重新开始
-              </button>
-              <button
-                onClick={handleAnalyze}
-                className="btn-primary"
-                disabled={state.fetchStatus === 'fetching'}
-              >
-                {state.fetchStatus === 'fetching' ? '分析中...' : '开始分析'}
-              </button>
-            </div>
-          </div>
-        )}
+            {/* 步骤1: URL输入 */}
+            {currentStep === 1 && (
+              <UrlInput
+                onSubmit={handleUrlSubmit}
+                isLoading={state.fetchStatus === 'fetching'}
+              />
+            )}
 
-        {/* 步骤3: 分析结果 */}
-        {currentStep === 3 && state.analysis && (
-          <div className="space-y-6">
-            <AnalysisResultView analysis={state.analysis} />
-            <div className="flex justify-between">
-              <button onClick={() => setCurrentStep(2)} className="btn-secondary">
-                返回上一步
-              </button>
-              <button onClick={handleGenerateReport} className="btn-primary">
-                生成报告
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 步骤4: 报告预览 */}
-        {currentStep === 4 && state.article && state.stats && state.analysis && (
-          <div className="space-y-6">
-            <ReportPreview
-              article={state.article}
-              stats={state.stats}
-              analysis={state.analysis}
-            />
-            <div className="flex justify-between">
-              <button onClick={() => setCurrentStep(3)} className="btn-secondary">
-                返回上一步
-              </button>
-              <div className="space-x-4">
-                <button onClick={handleReset} className="btn-secondary">
-                  分析新文章
-                </button>
-                <button onClick={handleExportPDF} className="btn-primary">
-                  导出 PDF
-                </button>
+            {/* 步骤2: 文章预览 */}
+            {currentStep === 2 && state.article && (
+              <div className="space-y-6">
+                <ArticlePreview article={state.article} />
+                <div className="flex justify-between">
+                  <button onClick={handleReset} className="btn-secondary">
+                    重新开始
+                  </button>
+                  <button
+                    onClick={handleAnalyze}
+                    className="btn-primary"
+                    disabled={state.fetchStatus === 'fetching'}
+                  >
+                    {state.fetchStatus === 'fetching' ? '分析中...' : '开始分析'}
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            )}
+
+            {/* 步骤3: 分析结果 */}
+            {currentStep === 3 && state.analysis && (
+              <div className="space-y-6">
+                <AnalysisResultView
+                  analysis={state.analysis}
+                  onContentChange={handleContentChange}
+                />
+                <div className="flex justify-between">
+                  <button onClick={() => setCurrentStep(2)} className="btn-secondary">
+                    返回上一步
+                  </button>
+                  <button onClick={handleGoToDownload} className="btn-primary">
+                    下载文章
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 步骤4: 下载文章 */}
+            {currentStep === 4 && (
+              <div className="space-y-6">
+                {/* 文章预览卡片 */}
+                <div className="card">
+                  <h2 className="text-lg font-semibold text-gray-800 mb-4">文章预览</h2>
+                  <div className="bg-gray-50 rounded-lg p-6">
+                    <h3 className="text-xl font-bold text-gray-900 mb-4">{editedTitle}</h3>
+                    <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
+                      {editedContent}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-between text-sm text-gray-500">
+                    <span>字数：{editedContent.length}</span>
+                    <span>段落：{editedContent.split('\n\n').filter(p => p.trim()).length}</span>
+                  </div>
+                </div>
+
+                {/* 下载选项 */}
+                <div className="card">
+                  <h2 className="text-lg font-semibold text-gray-800 mb-4">下载选项</h2>
+                  <div className="grid grid-cols-3 gap-4">
+                    <button
+                      onClick={handleDownloadTxt}
+                      className="flex flex-col items-center p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+                    >
+                      <span className="text-2xl mb-2">📄</span>
+                      <span className="font-medium text-blue-700">TXT 格式</span>
+                      <span className="text-xs text-blue-600 mt-1">纯文本文件</span>
+                    </button>
+                    <button
+                      onClick={handleDownloadMarkdown}
+                      className="flex flex-col items-center p-4 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
+                    >
+                      <span className="text-2xl mb-2">📝</span>
+                      <span className="font-medium text-purple-700">Markdown</span>
+                      <span className="text-xs text-purple-600 mt-1">支持格式化</span>
+                    </button>
+                    <button
+                      onClick={handleCopyToClipboard}
+                      className="flex flex-col items-center p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors"
+                    >
+                      <span className="text-2xl mb-2">📋</span>
+                      <span className="font-medium text-green-700">复制内容</span>
+                      <span className="text-xs text-green-600 mt-1">复制到剪贴板</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 操作按钮 */}
+                <div className="flex justify-between">
+                  <button onClick={() => setCurrentStep(3)} className="btn-secondary">
+                    返回编辑
+                  </button>
+                  <button onClick={handleReset} className="btn-primary">
+                    分析新文章
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -382,15 +376,6 @@ function App() {
         isOpen={isLogViewerOpen}
         onClose={() => setIsLogViewerOpen(false)}
       />
-
-      {/* Cookie 输入对话框 */}
-      {isCookieInputOpen && state.url && (
-        <CookieInput
-          url={state.url}
-          onSuccess={handleCookieSuccess}
-          onCancel={() => setIsCookieInputOpen(false)}
-        />
-      )}
     </div>
   )
 }

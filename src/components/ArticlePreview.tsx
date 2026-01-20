@@ -48,23 +48,27 @@ export default function ArticlePreview({ article }: ArticlePreviewProps) {
               图片 ({article.images.length} 张)
             </label>
             <div className="flex space-x-2 overflow-x-auto pb-2">
-              {article.images.slice(0, 5).map((img, index) => (
-                <img
-                  key={index}
-                  src={img}
-                  alt={`图片 ${index + 1}`}
-                  className="w-20 h-20 object-cover rounded-lg flex-shrink-0"
-                  referrerPolicy="no-referrer"
-                  crossOrigin="anonymous"
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement
-                    if (target.src !== img) return // 避免重复设置
-                    target.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
-                      '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#f3f4f6"/><text x="40" y="40" text-anchor="middle" dominant-baseline="middle" fill="#9ca3af" font-size="12" font-family="sans-serif">加载失败</text></svg>'
-                    )
-                  }}
-                />
-              ))}
+              {article.images.slice(0, 5).map((img, index) => {
+                // base64图片不需要crossOrigin和referrerPolicy
+                const isBase64 = img.startsWith('data:')
+                return (
+                  <img
+                    key={index}
+                    src={img}
+                    alt={`图片 ${index + 1}`}
+                    className="w-20 h-20 object-cover rounded-lg flex-shrink-0"
+                    {...(!isBase64 && { referrerPolicy: "no-referrer", crossOrigin: "anonymous" })}
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement
+                      if (target.dataset.failed) return // 避免重复设置
+                      target.dataset.failed = 'true'
+                      target.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+                        '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#f3f4f6"/><text x="40" y="40" text-anchor="middle" dominant-baseline="middle" fill="#9ca3af" font-size="12" font-family="sans-serif">加载失败</text></svg>'
+                      )
+                    }}
+                  />
+                )
+              })}
               {article.images.length > 5 && (
                 <div className="w-20 h-20 bg-gray-200 rounded-lg flex items-center justify-center text-gray-500 text-sm flex-shrink-0">
                   +{article.images.length - 5}

@@ -59,7 +59,7 @@ export default function UrlInput({ onSubmit, isLoading }: UrlInputProps) {
             }`}
           >
             <div className="text-left">
-              <div className="font-semibold">单篇分析</div>
+              <div className="font-semibold">单篇文章</div>
               <div className="text-xs mt-1 opacity-90">深度分析一篇文章</div>
             </div>
           </button>
@@ -73,8 +73,8 @@ export default function UrlInput({ onSubmit, isLoading }: UrlInputProps) {
             }`}
           >
             <div className="text-left">
-              <div className="font-semibold">批量分析</div>
-              <div className="text-xs mt-1 opacity-90">分析整个公众号</div>
+              <div className="font-semibold">多篇文章</div>
+              <div className="text-xs mt-1 opacity-90">批量下载公众号文章</div>
             </div>
           </button>
         </div>
@@ -117,14 +117,14 @@ export default function UrlInput({ onSubmit, isLoading }: UrlInputProps) {
               {mode === 'single' ? '正在抓取文章...' : '正在提取公众号信息...'}
             </span>
           ) : (
-            mode === 'single' ? '开始分析' : '开始批量分析'
+            mode === 'single' ? '开始分析' : '开始批量下载'
           )}
         </button>
       </form>
 
       <div className="mt-6 p-4 bg-gray-50 rounded-lg">
         <h3 className="text-sm font-medium text-gray-700 mb-2">
-          {mode === 'single' ? '单篇分析说明' : '批量分析说明'}
+          {mode === 'single' ? '单篇文章说明' : '多篇文章说明'}
         </h3>
         {mode === 'single' ? (
           <ul className="text-sm text-gray-500 space-y-1">
@@ -138,7 +138,7 @@ export default function UrlInput({ onSubmit, isLoading }: UrlInputProps) {
             <li>1. 输入任意一篇该公众号的文章链接</li>
             <li>2. 系统会提取公众号信息并生成历史消息页面</li>
             <li>3. 在微信中打开历史消息页面获取Cookie</li>
-            <li>4. 批量抓取公众号所有文章并导出Excel</li>
+            <li>4. 批量下载文章链接或文章内容（html/pdf/word）</li>
           </ul>
         )}
       </div>

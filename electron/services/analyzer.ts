@@ -6,17 +6,31 @@ interface KeywordItem {
   weight: number
 }
 
-interface SentimentResult {
-  score: number
-  label: 'positive' | 'negative' | 'neutral'
-  positiveWords: string[]
-  negativeWords: string[]
+interface ArticleStrength {
+  title: string
+  description: string
+}
+
+interface ArticleWeakness {
+  title: string
+  description: string
+  suggestion: string
+}
+
+interface ImageSuggestion {
+  position: string
+  type: string
+  description: string
 }
 
 interface AnalysisResult {
+  strengths: ArticleStrength[]
+  weaknesses: ArticleWeakness[]
+  imageSuggestions: ImageSuggestion[]
+  newTitle: string
+  newContent: string
   keywords: KeywordItem[]
   summary: string
-  sentiment: SentimentResult
 }
 
 // 初始化分词器
@@ -33,38 +47,10 @@ const stopWords = new Set([
   '大概', '一直', '一定', '一样', '一起', '已经', '正在', '将要',
   '曾经', '现在', '以后', '之前', '之后', '时候', '地方', '方面',
   '问题', '情况', '关系', '作用', '影响', '结果', '原因', '目的',
-  '方法', '过程', '内容', '形式', '特点', '性质', '程度', '范围',
-  '条件', '标准', '要求', '原则', '规定', '规则', '制度', '政策',
-  '措施', '办法', '方案', '计划', '目标', '任务', '工作', '活动',
-  '会议', '报告', '文件', '资料', '数据', '信息', '知识', '经验',
-  '能力', '水平', '质量', '效果', '效率', '效益', '价值', '意义',
-  '重要', '主要', '基本', '一般', '具体', '实际', '真正', '完全',
-  '非常', '特别', '十分', '相当', '比较', '更加', '最', '很',
-  '太', '挺', '蛮', '极', '颇', '稍', '略', '有点'
+  '方法', '过程', '内容', '形式', '特点', '性质', '程度', '范围'
 ])
 
-// 情感词典（简化版）
-const positiveWords = new Set([
-  '好', '优秀', '出色', '卓越', '精彩', '完美', '成功', '进步',
-  '提升', '改善', '增长', '发展', '创新', '突破', '领先', '优势',
-  '喜欢', '爱', '赞', '棒', '强', '妙', '美', '佳',
-  '快乐', '开心', '高兴', '幸福', '满意', '感谢', '支持', '鼓励',
-  '希望', '期待', '信心', '机会', '潜力', '前景', '未来', '价值',
-  '品质', '专业', '可靠', '稳定', '安全', '健康', '环保', '智能',
-  '便捷', '高效', '实用', '免费', '优惠', '惊喜', '推荐', '值得'
-])
-
-const negativeWords = new Set([
-  '差', '糟', '坏', '劣', '烂', '垃圾', '失败', '错误',
-  '问题', '困难', '麻烦', '危险', '风险', '威胁', '损失', '下降',
-  '减少', '落后', '弱', '缺点', '缺陷', '不足', '漏洞', '隐患',
-  '担心', '焦虑', '紧张', '害怕', '恐惧', '痛苦', '难过', '失望',
-  '愤怒', '生气', '讨厌', '反感', '厌恶', '抱怨', '投诉', '批评',
-  '否定', '拒绝', '反对', '阻止', '限制', '禁止', '违规', '违法',
-  '欺骗', '虚假', '谣言', '骗局', '陷阱', '套路', '坑', '亏'
-])
-
-export async function analyzeContent(content: string): Promise<AnalysisResult> {
+export async function analyzeContent(content: string, title?: string): Promise<AnalysisResult> {
   logger.info('开始分析文章内容', { contentLength: content.length })
 
   try {
@@ -86,15 +72,34 @@ export async function analyzeContent(content: string): Promise<AnalysisResult> {
     const summary = generateSummary(content)
     logger.info('摘要生成完成', { summaryLength: summary.length })
 
-    // 情感分析
-    logger.debug('开始情感分析')
-    const sentiment = analyzeSentiment(words)
-    logger.info('情感分析完成', { sentiment: sentiment.label, score: sentiment.score })
+    // 分析文章优点
+    logger.debug('开始分析文章优点')
+    const strengths = analyzeStrengths(content, words, keywords)
+    logger.info('优点分析完成', { count: strengths.length })
 
-    const result = {
+    // 分析文章缺点
+    logger.debug('开始分析文章缺点')
+    const weaknesses = analyzeWeaknesses(content, words)
+    logger.info('缺点分析完成', { count: weaknesses.length })
+
+    // 生成配图建议
+    logger.debug('开始生成配图建议')
+    const imageSuggestions = generateImageSuggestions(content, keywords)
+    logger.info('配图建议生成完成', { count: imageSuggestions.length })
+
+    // 生成新文章
+    logger.debug('开始生成新文章')
+    const { newTitle, newContent } = generateNewArticle(content, title || '', keywords, weaknesses)
+    logger.info('新文章生成完成', { newContentLength: newContent.length })
+
+    const result: AnalysisResult = {
+      strengths,
+      weaknesses,
+      imageSuggestions,
+      newTitle,
+      newContent,
       keywords,
-      summary,
-      sentiment
+      summary
     }
 
     logger.info('文章分析完成')
@@ -107,35 +112,25 @@ export async function analyzeContent(content: string): Promise<AnalysisResult> {
 
 // TF-IDF 关键词提取
 function extractKeywords(words: string[]): KeywordItem[] {
-  // 统计词频
   const wordFreq = new Map<string, number>()
 
   for (const word of words) {
-    // 过滤停用词和短词
     if (stopWords.has(word) || word.length < 2) continue
-
-    // 只保留中文词汇
     if (!/[\u4e00-\u9fa5]/.test(word)) continue
-
     wordFreq.set(word, (wordFreq.get(word) || 0) + 1)
   }
 
-  // 计算权重并排序
   const totalWords = words.length
   const keywords: KeywordItem[] = []
 
   for (const [word, freq] of wordFreq) {
-    // 简化的 TF-IDF 计算
     const tf = freq / totalWords
     const weight = tf * Math.log(totalWords / freq)
-
     keywords.push({ word, weight })
   }
 
-  // 按权重排序，取前15个
   keywords.sort((a, b) => b.weight - a.weight)
 
-  // 归一化权重
   const maxWeight = keywords[0]?.weight || 1
   return keywords.slice(0, 15).map(k => ({
     word: k.word,
@@ -145,7 +140,6 @@ function extractKeywords(words: string[]): KeywordItem[] {
 
 // 提取式摘要生成
 function generateSummary(content: string): string {
-  // 按句子分割
   const sentences = content
     .split(/[。！？\n]/)
     .map(s => s.trim())
@@ -155,19 +149,13 @@ function generateSummary(content: string): string {
     return content.slice(0, 200)
   }
 
-  // 计算句子权重（基于关键词密度和位置）
   const sentenceScores: { sentence: string; score: number }[] = []
 
   for (let i = 0; i < sentences.length; i++) {
     const sentence = sentences[i]
-
-    // 位置权重（开头和结尾权重更高）
     const positionScore = i < 3 ? 1.5 : (i >= sentences.length - 2 ? 1.3 : 1.0)
-
-    // 长度权重（适中长度更好）
     const lengthScore = sentence.length > 30 && sentence.length < 100 ? 1.2 : 1.0
 
-    // 包含关键词的权重
     let keywordScore = 1.0
     const importantPatterns = ['重要', '关键', '核心', '首先', '最后', '总结', '结论']
     for (const pattern of importantPatterns) {
@@ -183,7 +171,6 @@ function generateSummary(content: string): string {
     })
   }
 
-  // 按权重排序，选择前3-5句
   sentenceScores.sort((a, b) => b.score - a.score)
 
   const summaryCount = Math.min(4, Math.ceil(sentences.length * 0.2))
@@ -195,46 +182,282 @@ function generateSummary(content: string): string {
   return selectedSentences.join('。') + '。'
 }
 
-// 情感分析
-function analyzeSentiment(words: string[]): SentimentResult {
-  const foundPositive: string[] = []
-  const foundNegative: string[] = []
+// 分析文章优点
+function analyzeStrengths(content: string, words: string[], keywords: KeywordItem[]): ArticleStrength[] {
+  const strengths: ArticleStrength[] = []
 
+  // 检查文章长度
+  if (content.length > 1000) {
+    strengths.push({
+      title: '内容充实',
+      description: `文章字数达到 ${content.length} 字，内容较为充实，能够详细阐述主题。`
+    })
+  }
+
+  // 检查段落结构
+  const paragraphs = content.split(/\n\n|\r\n\r\n/).filter(p => p.trim().length > 0)
+  if (paragraphs.length >= 3) {
+    strengths.push({
+      title: '结构清晰',
+      description: `文章分为 ${paragraphs.length} 个段落，层次分明，便于阅读。`
+    })
+  }
+
+  // 检查关键词密度
+  if (keywords.length >= 5) {
+    const topKeywords = keywords.slice(0, 5).map(k => k.word).join('、')
+    strengths.push({
+      title: '主题明确',
+      description: `文章围绕"${topKeywords}"等核心关键词展开，主题集中。`
+    })
+  }
+
+  // 检查是否有数据支撑
+  const hasNumbers = /\d+[%％万亿元个件次]/.test(content)
+  if (hasNumbers) {
+    strengths.push({
+      title: '数据支撑',
+      description: '文章包含具体数据，增强了内容的说服力和可信度。'
+    })
+  }
+
+  // 检查是否有引用或例子
+  const hasQuotes = content.includes('"') || content.includes('"') || content.includes('例如') || content.includes('比如')
+  if (hasQuotes) {
+    strengths.push({
+      title: '论据丰富',
+      description: '文章包含引用或举例说明，使内容更加生动具体。'
+    })
+  }
+
+  // 如果没有发现明显优点，添加一个通用优点
+  if (strengths.length === 0) {
+    strengths.push({
+      title: '表达通顺',
+      description: '文章语言表达较为流畅，基本能够清晰传达信息。'
+    })
+  }
+
+  return strengths
+}
+
+// 分析文章缺点
+function analyzeWeaknesses(content: string, words: string[]): ArticleWeakness[] {
+  const weaknesses: ArticleWeakness[] = []
+
+  // 检查文章长度
+  if (content.length < 500) {
+    weaknesses.push({
+      title: '内容偏短',
+      description: `文章仅有 ${content.length} 字，内容可能不够充实。`,
+      suggestion: '建议补充更多细节、案例或数据，使内容更加丰满。'
+    })
+  }
+
+  // 检查段落结构
+  const paragraphs = content.split(/\n\n|\r\n\r\n/).filter(p => p.trim().length > 0)
+  if (paragraphs.length < 3) {
+    weaknesses.push({
+      title: '段落较少',
+      description: '文章段落划分不够，可能影响阅读体验。',
+      suggestion: '建议将内容分成更多段落，每段聚焦一个小主题，增加层次感。'
+    })
+  }
+
+  // 检查是否有过长段落
+  const longParagraphs = paragraphs.filter(p => p.length > 300)
+  if (longParagraphs.length > 0) {
+    weaknesses.push({
+      title: '段落过长',
+      description: `存在 ${longParagraphs.length} 个超过300字的段落，可能造成阅读疲劳。`,
+      suggestion: '建议将长段落拆分，每段控制在100-200字，提升可读性。'
+    })
+  }
+
+  // 检查是否缺少数据
+  const hasNumbers = /\d+[%％万亿元个件次]/.test(content)
+  if (!hasNumbers) {
+    weaknesses.push({
+      title: '缺少数据支撑',
+      description: '文章缺少具体数据，说服力可能不足。',
+      suggestion: '建议添加相关统计数据、研究结果或具体案例来增强论点。'
+    })
+  }
+
+  // 检查是否有重复词汇
+  const wordFreq = new Map<string, number>()
   for (const word of words) {
-    if (positiveWords.has(word)) {
-      if (!foundPositive.includes(word)) {
-        foundPositive.push(word)
-      }
-    }
-    if (negativeWords.has(word)) {
-      if (!foundNegative.includes(word)) {
-        foundNegative.push(word)
-      }
+    if (word.length >= 2 && /[\u4e00-\u9fa5]/.test(word)) {
+      wordFreq.set(word, (wordFreq.get(word) || 0) + 1)
     }
   }
+  const repeatedWords = Array.from(wordFreq.entries())
+    .filter(([_, count]) => count > 10)
+    .map(([word]) => word)
 
-  const positiveCount = foundPositive.length
-  const negativeCount = foundNegative.length
-  const total = positiveCount + negativeCount
-
-  // 计算情感分数 (-1 到 1)
-  let score = 0
-  if (total > 0) {
-    score = (positiveCount - negativeCount) / total
+  if (repeatedWords.length > 3) {
+    weaknesses.push({
+      title: '用词重复',
+      description: `"${repeatedWords.slice(0, 3).join('、')}"等词重复出现过多。`,
+      suggestion: '建议使用同义词替换部分重复词汇，丰富文章语言表达。'
+    })
   }
 
-  // 确定情感标签
-  let label: 'positive' | 'negative' | 'neutral' = 'neutral'
-  if (score > 0.1) {
-    label = 'positive'
-  } else if (score < -0.1) {
-    label = 'negative'
+  // 检查开头吸引力
+  const firstSentence = content.split(/[。！？]/)[0] || ''
+  if (firstSentence.length > 50 || !firstSentence.includes('？') && !firstSentence.includes('！')) {
+    weaknesses.push({
+      title: '开头吸引力不足',
+      description: '文章开头较为平淡，可能不够吸引读者。',
+      suggestion: '建议使用提问、惊人事实或故事开头，快速抓住读者注意力。'
+    })
   }
 
-  return {
-    score,
-    label,
-    positiveWords: foundPositive,
-    negativeWords: foundNegative
+  return weaknesses
+}
+
+// 生成配图建议
+function generateImageSuggestions(content: string, keywords: KeywordItem[]): ImageSuggestion[] {
+  const suggestions: ImageSuggestion[] = []
+  const paragraphs = content.split(/\n\n|\r\n\r\n/).filter(p => p.trim().length > 0)
+  const topKeywords = keywords.slice(0, 3).map(k => k.word)
+
+  // 开头配图建议
+  suggestions.push({
+    position: '文章开头',
+    type: '封面图/题图',
+    description: `建议使用与"${topKeywords[0] || '主题'}"相关的高质量图片作为封面，吸引读者点击。可选择风格：简洁大气、色彩鲜明、与标题呼应。`
+  })
+
+  // 根据段落内容生成配图建议
+  if (paragraphs.length >= 3) {
+    // 检查是否有数据相关内容
+    const dataPattern = /\d+[%％]|数据|统计|增长|下降|比例/
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (dataPattern.test(paragraphs[i])) {
+        suggestions.push({
+          position: `第 ${i + 1} 段后`,
+          type: '数据图表',
+          description: '该段落包含数据信息，建议添加柱状图、折线图或饼图等可视化图表，让数据更直观。'
+        })
+        break
+      }
+    }
+
+    // 检查是否有流程或步骤
+    const stepPattern = /第一|第二|首先|其次|然后|最后|步骤|流程/
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (stepPattern.test(paragraphs[i])) {
+        suggestions.push({
+          position: `第 ${i + 1} 段后`,
+          type: '流程图/步骤图',
+          description: '该段落描述了流程或步骤，建议添加流程图或步骤示意图，帮助读者理解。'
+        })
+        break
+      }
+    }
   }
+
+  // 中间配图建议
+  if (paragraphs.length > 4) {
+    const midIndex = Math.floor(paragraphs.length / 2)
+    suggestions.push({
+      position: `第 ${midIndex} 段后`,
+      type: '场景图/示意图',
+      description: `在文章中部添加与"${topKeywords[1] || topKeywords[0] || '内容'}"相关的配图，缓解阅读疲劳，增强视觉吸引力。`
+    })
+  }
+
+  // 结尾配图建议
+  if (content.includes('总结') || content.includes('结论') || content.includes('最后')) {
+    suggestions.push({
+      position: '文章结尾',
+      type: '总结图/思维导图',
+      description: '建议在结尾添加一张总结性图片或思维导图，帮助读者回顾文章要点。'
+    })
+  }
+
+  return suggestions
+}
+
+// 生成新文章
+function generateNewArticle(
+  content: string,
+  originalTitle: string,
+  keywords: KeywordItem[],
+  weaknesses: ArticleWeakness[]
+): { newTitle: string; newContent: string } {
+  const topKeywords = keywords.slice(0, 3).map(k => k.word)
+
+  // 生成新标题
+  let newTitle = originalTitle
+  if (originalTitle) {
+    // 优化标题：添加数字或疑问
+    if (!/\d/.test(originalTitle) && !originalTitle.includes('？')) {
+      const titleTemplates = [
+        `${originalTitle}（深度解析）`,
+        `关于${topKeywords[0] || ''}，${originalTitle}`,
+        `${originalTitle}：你需要知道的一切`
+      ]
+      newTitle = titleTemplates[Math.floor(Math.random() * titleTemplates.length)]
+    }
+  } else {
+    newTitle = `深度解析：${topKeywords.join('与')}的关键要点`
+  }
+
+  // 生成新文章内容
+  const paragraphs = content.split(/\n\n|\r\n\r\n/).filter(p => p.trim().length > 0)
+
+  // 优化开头
+  let newIntro = ''
+  const originalIntro = paragraphs[0] || ''
+
+  // 添加引人入胜的开头
+  if (topKeywords.length > 0) {
+    newIntro = `【导读】在${topKeywords[0]}领域，有哪些关键知识点值得关注？本文将为您深入解析。\n\n`
+  }
+
+  // 处理正文段落
+  const processedParagraphs: string[] = []
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    let paragraph = paragraphs[i]
+
+    // 拆分过长段落
+    if (paragraph.length > 300) {
+      const sentences = paragraph.split(/[。！？]/).filter(s => s.trim())
+      const midPoint = Math.floor(sentences.length / 2)
+      const firstHalf = sentences.slice(0, midPoint).join('。') + '。'
+      const secondHalf = sentences.slice(midPoint).join('。') + '。'
+      processedParagraphs.push(firstHalf)
+      processedParagraphs.push(secondHalf)
+    } else {
+      processedParagraphs.push(paragraph)
+    }
+  }
+
+  // 添加小标题
+  const sectioned: string[] = []
+  const sectionSize = Math.ceil(processedParagraphs.length / 3)
+
+  for (let i = 0; i < processedParagraphs.length; i++) {
+    // 每隔几段添加一个小标题
+    if (i > 0 && i % sectionSize === 0) {
+      const sectionNum = Math.floor(i / sectionSize)
+      const sectionTitles = ['核心要点', '深入分析', '实践建议', '总结思考']
+      if (sectionNum < sectionTitles.length) {
+        sectioned.push(`\n**${sectionTitles[sectionNum]}**\n`)
+      }
+    }
+    sectioned.push(processedParagraphs[i])
+  }
+
+  // 添加结尾总结
+  let conclusion = '\n\n**写在最后**\n\n'
+  conclusion += `综上所述，关于${topKeywords.slice(0, 2).join('和')}的内容，希望本文能够为您提供有价值的参考。如果您觉得本文有帮助，欢迎分享给更多朋友。`
+
+  // 组合新文章
+  const newContent = newIntro + sectioned.join('\n\n') + conclusion
+
+  return { newTitle, newContent }
 }
