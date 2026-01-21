@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { AppState } from './types'
 import UrlInput from './components/UrlInput'
 import ArticlePreview from './components/ArticlePreview'
 import AnalysisResultView from './components/AnalysisResult'
 import LogViewer from './components/LogViewer'
 import BatchAnalyzer from './components/BatchAnalyzer'
+import AnalysisLoading from './components/AnalysisLoading'
 
 // 初始状态
 const initialState: AppState = {
@@ -25,6 +26,24 @@ function App() {
   // 编辑后的文章内容
   const [editedTitle, setEditedTitle] = useState('')
   const [editedContent, setEditedContent] = useState('')
+  // 分析进度状态
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analysisStatus, setAnalysisStatus] = useState('')
+  const [thinkingContent, setThinkingContent] = useState('')
+
+  // 监听分析进度
+  useEffect(() => {
+    const removeListener = window.electronAPI.onAnalysisProgress((data) => {
+      setAnalysisStatus(data.status)
+      if (data.thinking) {
+        setThinkingContent(prev => prev + data.thinking)
+      }
+    })
+
+    return () => {
+      removeListener()
+    }
+  }, [])
 
   // 处理URL提交
   const handleUrlSubmit = useCallback(async (url: string, mode: 'single' | 'batch' = 'single') => {
@@ -69,7 +88,11 @@ function App() {
   const handleAnalyze = useCallback(async () => {
     if (!state.article) return
 
-    setState(prev => ({ ...prev, fetchStatus: 'fetching' }))
+    // 重置分析状态
+    setIsAnalyzing(true)
+    setAnalysisStatus('正在初始化分析')
+    setThinkingContent('')
+    setState(prev => ({ ...prev, fetchStatus: 'fetching', error: null }))
 
     try {
       const result = await window.electronAPI.analyzeArticle(state.article.content, state.article.title)
@@ -97,6 +120,9 @@ function App() {
         fetchStatus: 'error',
         error: error instanceof Error ? error.message : '分析失败'
       }))
+    } finally {
+      setIsAnalyzing(false)
+      setAnalysisStatus('')
     }
   }, [state.article])
 
@@ -375,6 +401,13 @@ function App() {
       <LogViewer
         isOpen={isLogViewerOpen}
         onClose={() => setIsLogViewerOpen(false)}
+      />
+
+      {/* AI 分析加载动画 */}
+      <AnalysisLoading
+        isVisible={isAnalyzing}
+        status={analysisStatus}
+        thinkingContent={thinkingContent}
       />
     </div>
   )

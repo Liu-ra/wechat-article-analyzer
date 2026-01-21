@@ -8,6 +8,15 @@ const electronAPI = {
   // 分析文章
   analyzeArticle: (content: string, title?: string) => ipcRenderer.invoke('analyze-article', content, title),
 
+  // 监听分析进度
+  onAnalysisProgress: (callback: (data: { status: string; thinking?: string }) => void) => {
+    const handler = (_event: unknown, data: { status: string; thinking?: string }) => callback(data)
+    ipcRenderer.on('analysis-progress', handler)
+    return () => {
+      ipcRenderer.removeListener('analysis-progress', handler)
+    }
+  },
+
   // 下载文章
   downloadArticle: (data: { title: string; content: string; format: 'txt' | 'md' }) =>
     ipcRenderer.invoke('download-article', data),

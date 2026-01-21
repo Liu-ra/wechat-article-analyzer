@@ -1,5 +1,6 @@
 import Segment from 'segment'
 import { logger } from './logger'
+import { analyzeArticleWithAI } from './deepseek'
 
 interface KeywordItem {
   word: string
@@ -50,11 +51,24 @@ const stopWords = new Set([
   '方法', '过程', '内容', '形式', '特点', '性质', '程度', '范围'
 ])
 
-export async function analyzeContent(content: string, title?: string): Promise<AnalysisResult> {
-  logger.info('开始分析文章内容', { contentLength: content.length })
+type ProgressCallback = (status: string, thinking?: string) => void
+
+export async function analyzeContent(
+  content: string,
+  title?: string,
+  onProgress?: ProgressCallback
+): Promise<AnalysisResult> {
+  logger.info('开始分析文章内容', { contentLength: content.length, useAI: true })
+
+  const sendProgress = (status: string, thinking?: string) => {
+    if (onProgress) {
+      onProgress(status, thinking)
+    }
+  }
 
   try {
-    // 分词
+    // 分词提取关键词（本地处理）
+    sendProgress('正在提取关键词')
     logger.debug('开始分词')
     const words = segment.doSegment(content, {
       simple: true,
@@ -67,46 +81,87 @@ export async function analyzeContent(content: string, title?: string): Promise<A
     const keywords = extractKeywords(words)
     logger.info('关键词提取完成', { keywordCount: keywords.length })
 
-    // 生成摘要
-    logger.debug('开始生成摘要')
-    const summary = generateSummary(content)
-    logger.info('摘要生成完成', { summaryLength: summary.length })
+    // 使用 DeepSeek AI 进行深度分析
+    sendProgress('正在调用 DeepSeek AI 分析文章')
+    logger.info('开始调用 DeepSeek AI 进行分析')
 
-    // 分析文章优点
-    logger.debug('开始分析文章优点')
-    const strengths = analyzeStrengths(content, words, keywords)
-    logger.info('优点分析完成', { count: strengths.length })
+    const aiResult = await analyzeArticleWithAI(content, title, (thinking) => {
+      sendProgress('AI 正在思考', thinking)
+    })
 
-    // 分析文章缺点
-    logger.debug('开始分析文章缺点')
-    const weaknesses = analyzeWeaknesses(content, words)
-    logger.info('缺点分析完成', { count: weaknesses.length })
-
-    // 生成配图建议
-    logger.debug('开始生成配图建议')
-    const imageSuggestions = generateImageSuggestions(content, keywords)
-    logger.info('配图建议生成完成', { count: imageSuggestions.length })
-
-    // 生成新文章
-    logger.debug('开始生成新文章')
-    const { newTitle, newContent } = generateNewArticle(content, title || '', keywords, weaknesses)
-    logger.info('新文章生成完成', { newContentLength: newContent.length })
+    sendProgress('正在整理分析结果')
+    logger.info('DeepSeek AI 分析完成')
 
     const result: AnalysisResult = {
-      strengths,
-      weaknesses,
-      imageSuggestions,
-      newTitle,
-      newContent,
+      strengths: aiResult.strengths,
+      weaknesses: aiResult.weaknesses,
+      imageSuggestions: aiResult.imageSuggestions,
+      newTitle: aiResult.newTitle,
+      newContent: aiResult.newContent,
       keywords,
-      summary
+      summary: aiResult.summary
     }
 
+    sendProgress('分析完成')
     logger.info('文章分析完成')
     return result
   } catch (error) {
-    logger.error('文章分析失败', { error: error instanceof Error ? error.message : error })
-    throw error
+    logger.error('AI分析失败，使用本地分析', { error: error instanceof Error ? error.message : error })
+    sendProgress('AI 分析失败，使用本地规则分析')
+
+    // AI 失败时回退到本地分析
+    return analyzeContentLocal(content, title, onProgress)
+  }
+}
+
+// 本地分析（作为 AI 失败时的回退方案）
+async function analyzeContentLocal(
+  content: string,
+  title?: string,
+  onProgress?: ProgressCallback
+): Promise<AnalysisResult> {
+  logger.info('使用本地规则进行分析')
+
+  const sendProgress = (status: string) => {
+    if (onProgress) {
+      onProgress(status)
+    }
+  }
+
+  sendProgress('正在分词处理')
+  const words = segment.doSegment(content, {
+    simple: true,
+    stripPunctuation: true
+  }) as string[]
+
+  sendProgress('正在提取关键词')
+  const keywords = extractKeywords(words)
+
+  sendProgress('正在生成摘要')
+  const summary = generateSummary(content)
+
+  sendProgress('正在分析文章优点')
+  const strengths = analyzeStrengths(content, words, keywords)
+
+  sendProgress('正在分析文章缺点')
+  const weaknesses = analyzeWeaknesses(content, words)
+
+  sendProgress('正在生成配图建议')
+  const imageSuggestions = generateImageSuggestions(content, keywords)
+
+  sendProgress('正在生成优化文章')
+  const { newTitle, newContent } = generateNewArticle(content, title || '', keywords, weaknesses)
+
+  sendProgress('分析完成')
+
+  return {
+    strengths,
+    weaknesses,
+    imageSuggestions,
+    newTitle,
+    newContent,
+    keywords,
+    summary
   }
 }
 

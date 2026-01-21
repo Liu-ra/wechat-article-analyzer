@@ -145,9 +145,14 @@ ipcMain.handle('fetch-article', async (_event, url: string) => {
 })
 
 // 分析文章
-ipcMain.handle('analyze-article', async (_event, content: string, title?: string) => {
+ipcMain.handle('analyze-article', async (event, content: string, title?: string) => {
   try {
-    const result = await analyzeContent(content, title)
+    // 发送进度更新的辅助函数
+    const sendProgress = (status: string, thinking?: string) => {
+      event.sender.send('analysis-progress', { status, thinking })
+    }
+
+    const result = await analyzeContent(content, title, sendProgress)
     return { success: true, data: result }
   } catch (error) {
     console.error('分析文章失败:', error)

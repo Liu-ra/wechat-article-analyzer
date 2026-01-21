@@ -16,6 +16,8 @@ interface ElectronAPI {
     error?: string
   }>
 
+  onAnalysisProgress: (callback: (data: { status: string; thinking?: string }) => void) => () => void
+
   downloadArticle: (data: { title: string; content: string; format: 'txt' | 'md' }) => Promise<{
     success: boolean
     path?: string
