@@ -145,6 +145,31 @@ interface ElectronAPI {
 
   onAutoCookieFound: (callback: (cookieString: string) => void) => () => void
 
+  onAutoArticlesFound: (callback: (data: { articles: Array<{
+    title: string
+    url: string
+    cover: string
+    digest: string
+    publishTime: number
+    author: string
+  }>, nickname: string }) => void) => () => void
+
+  getCapturedArticles: () => Promise<{
+    success: boolean
+    data?: {
+      articles: Array<{
+        title: string
+        url: string
+        cover: string
+        digest: string
+        publishTime: number
+        author: string
+      }>
+      nickname: string
+    }
+    error?: string
+  }>
+
   extractAccountInfo: (url: string) => Promise<{
     success: boolean
     data?: {

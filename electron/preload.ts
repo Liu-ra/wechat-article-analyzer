@@ -116,6 +116,19 @@ const electronAPI = {
     }
   },
 
+  // 监听自动捕获的文章列表
+  onAutoArticlesFound: (callback: (data: { articles: unknown[], nickname: string }) => void) => {
+    const handler = (_event: unknown, data: { articles: unknown[], nickname: string }) => callback(data)
+    ipcRenderer.on('auto-articles-found', handler)
+    return () => {
+      ipcRenderer.removeListener('auto-articles-found', handler)
+    }
+  },
+
+  // 获取已捕获的文章列表
+  getCapturedArticles: () =>
+    ipcRenderer.invoke('get-captured-articles'),
+
   // 批量分析 - 提取公众号信息
   extractAccountInfo: (url: string) =>
     ipcRenderer.invoke('extract-account-info', url),

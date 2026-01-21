@@ -12,14 +12,6 @@ export default function ReportPreview({ article, stats, analysis }: ReportPrevie
     return num.toLocaleString()
   }
 
-  const getSentimentLabel = (label: string) => {
-    switch (label) {
-      case 'positive': return '正面'
-      case 'negative': return '负面'
-      default: return '中性'
-    }
-  }
-
   return (
     <div className="card">
       <h2 className="text-lg font-semibold text-gray-800 mb-4">报告预览</h2>
@@ -130,39 +122,67 @@ export default function ReportPreview({ article, stats, analysis }: ReportPrevie
           <p className="text-gray-700 leading-relaxed text-sm">{analysis.summary}</p>
         </section>
 
-        {/* 情感分析 */}
-        <section className="mb-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">
-            五、情感分析
-          </h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm text-gray-500">情感倾向</p>
-              <p className="text-lg font-semibold">{getSentimentLabel(analysis.sentiment.label)}</p>
+        {/* 文章优点 */}
+        {analysis.strengths && analysis.strengths.length > 0 && (
+          <section className="mb-6">
+            <h2 className="text-lg font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">
+              五、文章优点
+            </h2>
+            <div className="space-y-3">
+              {analysis.strengths.map((strength, index) => (
+                <div key={index} className="p-3 bg-green-50 rounded-lg">
+                  <p className="font-medium text-green-800">{strength.title}</p>
+                  <p className="text-sm text-green-600 mt-1">{strength.description}</p>
+                </div>
+              ))}
             </div>
-            <div>
-              <p className="text-sm text-gray-500">情感分数</p>
-              <p className="text-lg font-semibold">{(analysis.sentiment.score * 100).toFixed(0)} / 100</p>
+          </section>
+        )}
+
+        {/* 文章缺点与建议 */}
+        {analysis.weaknesses && analysis.weaknesses.length > 0 && (
+          <section className="mb-6">
+            <h2 className="text-lg font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">
+              六、改进建议
+            </h2>
+            <div className="space-y-3">
+              {analysis.weaknesses.map((weakness, index) => (
+                <div key={index} className="p-3 bg-orange-50 rounded-lg">
+                  <p className="font-medium text-orange-800">{weakness.title}</p>
+                  <p className="text-sm text-orange-600 mt-1">{weakness.description}</p>
+                  <p className="text-sm text-blue-600 mt-2">
+                    <span className="font-medium">建议：</span>{weakness.suggestion}
+                  </p>
+                </div>
+              ))}
             </div>
-          </div>
-          {analysis.sentiment.positiveWords.length > 0 && (
-            <div className="mt-3">
-              <p className="text-sm text-gray-500 mb-1">正面词汇</p>
-              <p className="text-sm text-green-600">{analysis.sentiment.positiveWords.slice(0, 10).join('、')}</p>
+          </section>
+        )}
+
+        {/* 配图建议 */}
+        {analysis.imageSuggestions && analysis.imageSuggestions.length > 0 && (
+          <section className="mb-6">
+            <h2 className="text-lg font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">
+              七、配图建议
+            </h2>
+            <div className="space-y-3">
+              {analysis.imageSuggestions.map((suggestion, index) => (
+                <div key={index} className="p-3 bg-purple-50 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-1 bg-purple-200 text-purple-800 rounded text-xs">{suggestion.type}</span>
+                    <span className="text-sm text-purple-600">{suggestion.position}</span>
+                  </div>
+                  <p className="text-sm text-purple-700 mt-2">{suggestion.description}</p>
+                </div>
+              ))}
             </div>
-          )}
-          {analysis.sentiment.negativeWords.length > 0 && (
-            <div className="mt-2">
-              <p className="text-sm text-gray-500 mb-1">负面词汇</p>
-              <p className="text-sm text-red-600">{analysis.sentiment.negativeWords.slice(0, 10).join('、')}</p>
-            </div>
-          )}
-        </section>
+          </section>
+        )}
 
         {/* 报告尾部 */}
         <div className="text-center pt-6 border-t border-gray-200">
           <p className="text-xs text-gray-400">
-            本报告由「微信公众号文章分析工具 V1.0」自动生成
+            本报告由「微信公众号文章分析工具 V2.0」自动生成
           </p>
         </div>
       </div>

@@ -42,12 +42,81 @@ export default function BatchAnalyzer({ url, onBack }: BatchAnalyzerProps) {
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0, currentTitle: '' })
   const [isDownloading, setIsDownloading] = useState(false)
 
-  // 监听自动获取到的Cookie
+  // 监听自动捕获的文章列表（新方案：直接从代理响应捕获）
+  useEffect(() => {
+    const handleArticlesFound = (data: { articles: ArticleItem[], nickname: string }) => {
+      console.log('📚 收到自动捕获的文章列表', { count: data.articles.length, nickname: data.nickname })
+
+      // 更新文章列表
+      setArticles(data.articles)
+
+      // 更新公众号信息
+      if (data.nickname) {
+        setAccountInfo(prev => prev ? { ...prev, nickname: data.nickname } : {
+          biz,
+          nickname: data.nickname,
+          avatar: '',
+          signature: ''
+        })
+      }
+    }
+
+    const removeListener = window.electronAPI.onAutoArticlesFound(handleArticlesFound)
+
+    return () => {
+      removeListener()
+      console.log('🧹 清理文章监听器')
+    }
+  }, [biz])
+
+  // 监听自动获取到的Cookie（备用方案）
   useEffect(() => {
     const handleCookieFound = async (cookie: string) => {
       console.log('🎯 收到自动捕获的Cookie', { cookieLength: cookie.length, biz })
 
       setCookieString(cookie)
+
+      // 检查是否已经通过代理直接捕获了文章
+      const capturedResult = await window.electronAPI.getCapturedArticles()
+      if (capturedResult.success && capturedResult.data && capturedResult.data.articles.length > 0) {
+        console.log('✅ 已通过代理直接捕获文章，跳过Cookie验证', {
+          articleCount: capturedResult.data.articles.length,
+          nickname: capturedResult.data.nickname
+        })
+
+        setArticles(capturedResult.data.articles)
+        if (capturedResult.data.nickname) {
+          setAccountInfo({
+            biz,
+            nickname: capturedResult.data.nickname,
+            avatar: '',
+            signature: ''
+          })
+        } else {
+          setAccountInfo({
+            biz,
+            nickname: '公众号',
+            avatar: '',
+            signature: ''
+          })
+        }
+
+        setIsProxyRunning(false)
+        setStep('export')
+        setError(null)
+
+        // 停止自动监听
+        try {
+          await window.electronAPI.autoStopCookieMonitoring()
+          console.log('✓ 代理服务器已停止')
+        } catch (err) {
+          console.error('停止自动监听失败', err)
+        }
+
+        return
+      }
+
+      // 如果没有捕获到文章，使用传统的Cookie验证流程
       setIsProxyRunning(false)
       setIsLoading(true)
       setError(null)
@@ -68,7 +137,7 @@ export default function BatchAnalyzer({ url, onBack }: BatchAnalyzerProps) {
         return
       }
 
-      console.log('🔍 开始自动验证Cookie', { biz })
+      console.log('🔍 开始自动验证Cookie（备用方案）', { biz })
 
       try {
         const verifyResult = await window.electronAPI.fetchAccountInfo(biz, cookie)
@@ -80,8 +149,9 @@ export default function BatchAnalyzer({ url, onBack }: BatchAnalyzerProps) {
           setError(null)
           console.log('✅ Cookie自动验证成功，已进入下一步')
         } else {
-          setError(verifyResult.error || 'Cookie验证失败')
-          console.error('❌ Cookie验证失败', verifyResult.error)
+          // Cookie验证失败，但可能已经有捕获的文章
+          console.warn('Cookie验证失败，检查是否有捕获的文章')
+          setError(verifyResult.error || 'Cookie验证失败，请重新滑动查看更多文章')
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Cookie验证失败'

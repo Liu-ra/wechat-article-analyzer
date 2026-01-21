@@ -2,12 +2,42 @@ import http from 'http'
 import https from 'https'
 import net from 'net'
 import tls from 'tls'
+import zlib from 'zlib'
 import { logger } from './logger'
 import { generateCACertificate, generateServerCertificate } from './certificateManager'
+
+interface ArticleData {
+  title: string
+  url: string
+  cover: string
+  digest: string
+  publishTime: number
+  author: string
+}
 
 interface ProxyConfig {
   port: number
   onCookieFound: (cookieString: string) => void
+  onArticlesFound?: (articles: ArticleData[], nickname?: string) => void
+}
+
+// 存储捕获的文章数据
+let capturedArticles: ArticleData[] = []
+let capturedNickname: string = ''
+
+/**
+ * 获取已捕获的文章列表
+ */
+export function getCapturedArticles(): { articles: ArticleData[], nickname: string } {
+  return { articles: capturedArticles, nickname: capturedNickname }
+}
+
+/**
+ * 清空已捕获的文章列表
+ */
+export function clearCapturedArticles(): void {
+  capturedArticles = []
+  capturedNickname = ''
 }
 
 let server: http.Server | null = null
@@ -168,8 +198,11 @@ function handleHttpsConnect(
       // 检查并提取完整Cookie（包括URL参数）
       checkAndExtractCompleteCookie(requestPath, cookieHeader, host, config)
 
+      // 检查是否是 getmsg 请求，需要捕获响应
+      const isGetmsgRequest = requestPath.includes('action=getmsg')
+
       // 转发到真实服务器
-      forwardToRealServer(host, port, data, tlsSocket)
+      forwardToRealServer(host, port, data, tlsSocket, isGetmsgRequest, config)
     } catch (err) {
       logger.error('处理解密请求失败', { error: err instanceof Error ? err.message : String(err) })
     }
@@ -193,7 +226,14 @@ function handleHttpsConnect(
 /**
  * 转发到真实服务器
  */
-function forwardToRealServer(host: string, port: number, data: Buffer, clientTlsSocket: tls.TLSSocket) {
+function forwardToRealServer(
+  host: string,
+  port: number,
+  data: Buffer,
+  clientTlsSocket: tls.TLSSocket,
+  captureResponse: boolean = false,
+  config?: ProxyConfig
+) {
   const serverSocket = tls.connect(
     {
       host,
@@ -204,9 +244,34 @@ function forwardToRealServer(host: string, port: number, data: Buffer, clientTls
       // 发送请求
       serverSocket.write(data)
 
-      // 双向转发数据
-      serverSocket.pipe(clientTlsSocket)
-      clientTlsSocket.pipe(serverSocket)
+      if (captureResponse && config) {
+        // 需要捕获响应数据
+        const responseChunks: Buffer[] = []
+
+        serverSocket.on('data', (chunk) => {
+          responseChunks.push(chunk)
+          // 同时转发给客户端
+          clientTlsSocket.write(chunk)
+        })
+
+        serverSocket.on('end', () => {
+          // 解析响应
+          try {
+            const fullResponse = Buffer.concat(responseChunks)
+            parseAndStoreArticles(fullResponse, config)
+          } catch (err) {
+            logger.debug('解析getmsg响应失败', { error: err instanceof Error ? err.message : String(err) })
+          }
+          clientTlsSocket.end()
+        })
+
+        // 仍然允许客户端向服务器发送数据
+        clientTlsSocket.pipe(serverSocket)
+      } else {
+        // 普通双向转发
+        serverSocket.pipe(clientTlsSocket)
+        clientTlsSocket.pipe(serverSocket)
+      }
     }
   )
 
@@ -222,6 +287,160 @@ function forwardToRealServer(host: string, port: number, data: Buffer, clientTls
       // 忽略关闭时的错误
     }
   })
+}
+
+/**
+ * 从chunked编码的body中提取实际数据
+ */
+function extractChunkedBody(chunkedBody: Buffer): Buffer {
+  const chunks: Buffer[] = []
+  let offset = 0
+
+  while (offset < chunkedBody.length) {
+    // 找到chunk size行的结束位置
+    let lineEnd = -1
+    for (let i = offset; i < chunkedBody.length - 1; i++) {
+      if (chunkedBody[i] === 0x0d && chunkedBody[i + 1] === 0x0a) {
+        lineEnd = i
+        break
+      }
+    }
+    if (lineEnd === -1) break
+
+    // 解析chunk size（十六进制）
+    const sizeLine = chunkedBody.slice(offset, lineEnd).toString('utf-8').trim()
+    const chunkSize = parseInt(sizeLine, 16)
+    if (isNaN(chunkSize) || chunkSize === 0) break
+
+    // 读取chunk数据
+    const chunkStart = lineEnd + 2
+    const chunkEnd = chunkStart + chunkSize
+    if (chunkEnd > chunkedBody.length) break
+
+    chunks.push(chunkedBody.slice(chunkStart, chunkEnd))
+
+    // 跳过chunk末尾的\r\n
+    offset = chunkEnd + 2
+  }
+
+  return Buffer.concat(chunks)
+}
+
+/**
+ * 解析并存储文章数据
+ */
+function parseAndStoreArticles(response: Buffer, config: ProxyConfig) {
+  try {
+    // 找到HTTP header和body的分界点
+    const headerEndMarker = Buffer.from('\r\n\r\n')
+    let headerEndIndex = -1
+    for (let i = 0; i <= response.length - 4; i++) {
+      if (response[i] === 0x0d && response[i + 1] === 0x0a &&
+          response[i + 2] === 0x0d && response[i + 3] === 0x0a) {
+        headerEndIndex = i
+        break
+      }
+    }
+    if (headerEndIndex === -1) return
+
+    // 分离header和body
+    const headerPart = response.slice(0, headerEndIndex).toString('utf-8')
+    let bodyBuffer = response.slice(headerEndIndex + 4)
+
+    // 检查是否是gzip压缩
+    const isGzip = headerPart.toLowerCase().includes('content-encoding: gzip')
+
+    // 如果是gzip压缩，解压
+    if (isGzip) {
+      try {
+        // 处理chunked编码：提取实际的body数据
+        if (headerPart.toLowerCase().includes('transfer-encoding: chunked')) {
+          bodyBuffer = extractChunkedBody(bodyBuffer)
+        }
+        bodyBuffer = zlib.gunzipSync(bodyBuffer)
+        logger.debug('成功解压gzip数据', { decompressedSize: bodyBuffer.length })
+      } catch (gzipErr) {
+        logger.debug('gzip解压失败', { error: gzipErr instanceof Error ? gzipErr.message : String(gzipErr) })
+        return
+      }
+    }
+
+    let body = bodyBuffer.toString('utf-8')
+
+    // 处理 chunked 编码（如果是未压缩的chunked）
+    if (!isGzip && headerPart.toLowerCase().includes('transfer-encoding: chunked')) {
+      // 简单处理：尝试提取JSON部分
+      const jsonStart = body.indexOf('{')
+      const jsonEnd = body.lastIndexOf('}')
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        body = body.substring(jsonStart, jsonEnd + 1)
+      }
+    }
+
+    const data = JSON.parse(body)
+
+    if (data.ret !== 0) {
+      logger.debug('getmsg响应ret非0', { ret: data.ret })
+      return
+    }
+
+    // 提取公众号昵称
+    if (data.nickname && !capturedNickname) {
+      capturedNickname = data.nickname
+      logger.info('✓ 捕获到公众号昵称', { nickname: capturedNickname })
+    }
+
+    // 解析文章列表
+    const generalMsgList = JSON.parse(data.general_msg_list || '{"list":[]}')
+    const newArticles: ArticleData[] = []
+
+    for (const msg of generalMsgList.list) {
+      if (msg.app_msg_ext_info) {
+        const item = msg.app_msg_ext_info
+        newArticles.push({
+          title: item.title,
+          url: item.content_url,
+          cover: item.cover,
+          digest: item.digest,
+          publishTime: msg.comm_msg_info?.datetime || 0,
+          author: item.author || ''
+        })
+
+        // 处理多图文
+        if (item.multi_app_msg_item_list && item.multi_app_msg_item_list.length > 0) {
+          for (const subItem of item.multi_app_msg_item_list) {
+            newArticles.push({
+              title: subItem.title,
+              url: subItem.content_url,
+              cover: subItem.cover,
+              digest: subItem.digest,
+              publishTime: msg.comm_msg_info?.datetime || 0,
+              author: subItem.author || ''
+            })
+          }
+        }
+      }
+    }
+
+    if (newArticles.length > 0) {
+      // 去重后添加到已捕获列表
+      const existingUrls = new Set(capturedArticles.map(a => a.url))
+      const uniqueNewArticles = newArticles.filter(a => !existingUrls.has(a.url))
+      capturedArticles.push(...uniqueNewArticles)
+
+      logger.info('✓ 捕获到文章列表', {
+        newCount: uniqueNewArticles.length,
+        totalCount: capturedArticles.length
+      })
+
+      // 通知回调
+      if (config.onArticlesFound) {
+        config.onArticlesFound(capturedArticles, capturedNickname)
+      }
+    }
+  } catch (err) {
+    logger.debug('解析文章数据失败', { error: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 /**

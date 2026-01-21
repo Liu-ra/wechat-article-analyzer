@@ -192,75 +192,171 @@ export async function fetchAccountInfo(
   cookies: WechatCookies
 ): Promise<AccountInfo | null> {
   try {
-    const profileUrl = generateProfileUrl(biz)
+    logger.info('开始获取公众号信息（使用Puppeteer）', { biz: biz.substring(0, 20) })
 
-    const cookieHeader = Object.entries(cookies)
-      .filter(([_, value]) => value)
-      .map(([key, value]) => `${key}=${value}`)
-      .join('; ')
-
-    logger.info('开始获取公众号信息', { biz: biz.substring(0, 20) })
-
-    const response = await axios.get(profileUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.44',
-        'Cookie': cookieHeader,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'zh-CN,zh;q=0.9'
-      },
-      timeout: 15000
+    // 使用 Puppeteer 来访问页面，更好地模拟真实浏览器
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     })
 
-    // 从HTML中提取公众号信息
-    const html = response.data
+    try {
+      const page = await browser.newPage()
 
-    // 调试：记录HTML片段
-    logger.debug('获取到的HTML片段', {
-      htmlLength: html.length,
-      htmlPreview: html.substring(0, 500)
-    })
+      // 设置 User-Agent
+      await page.setUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.44'
+      )
 
-    // 提取昵称 - 多种匹配模式
-    const nicknameMatch = html.match(/var\s+nickname\s*=\s*"([^"]+)"/) ||
-                          html.match(/var\s+nickname\s*=\s*'([^']+)'/) ||
-                          html.match(/"nickname"\s*:\s*"([^"]+)"/) ||
-                          html.match(/nickname:\s*"([^"]+)"/) ||
-                          html.match(/nickname:\s*'([^']+)'/) ||
-                          html.match(/<title>([^<]+)<\/title>/) // 备用：从标题提取
-    let nickname = nicknameMatch ? nicknameMatch[1] : '未知公众号'
+      // 设置 Cookie
+      const cookieList = Object.entries(cookies)
+        .filter(([_, value]) => value)
+        .map(([name, value]) => ({
+          name,
+          value: value!,
+          domain: 'mp.weixin.qq.com',
+          path: '/'
+        }))
 
-    // 如果从title提取，需要清理
-    if (nickname.includes('的历史消息')) {
-      nickname = nickname.replace('的历史消息', '').trim()
-    }
+      // 同时设置到多个域名
+      const allCookies = [
+        ...cookieList,
+        ...cookieList.map(c => ({ ...c, domain: '.qq.com' })),
+        ...cookieList.map(c => ({ ...c, domain: '.weixin.qq.com' }))
+      ]
 
-    // 提取头像
-    const avatarMatch = html.match(/var\s+headimg\s*=\s*"([^"]+)"/) ||
-                       html.match(/var\s+headimg\s*=\s*'([^']+)'/) ||
-                       html.match(/"headimg"\s*:\s*"([^"]+)"/) ||
-                       html.match(/headimg:\s*"([^"]+)"/)
-    const avatar = avatarMatch ? avatarMatch[1] : ''
+      await page.setCookie(...allCookies)
 
-    // 提取签名
-    const signatureMatch = html.match(/var\s+signature\s*=\s*"([^"]+)"/) ||
-                          html.match(/var\s+signature\s*=\s*'([^']+)'/) ||
-                          html.match(/"signature"\s*:\s*"([^"]+)"/) ||
-                          html.match(/signature:\s*"([^"]+)"/)
-    const signature = signatureMatch ? signatureMatch[1] : ''
+      // 访问公众号历史页面
+      const profileUrl = generateProfileUrl(biz)
+      await page.goto(profileUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      })
 
-    logger.info('✓ 公众号信息获取成功', { nickname, biz: biz.substring(0, 20), hasAvatar: !!avatar })
+      // 等待页面加载
+      await new Promise(resolve => setTimeout(resolve, 2000))
 
-    return {
-      biz,
-      nickname,
-      avatar,
-      signature
+      // 提取页面信息
+      const result = await page.evaluate(() => {
+        const html = document.documentElement.innerHTML
+
+        // 检测验证页面
+        if (document.title === '验证' ||
+            html.includes('请在微信客户端打开') ||
+            html.includes('请长按网址复制')) {
+          return { error: 'verification_page' }
+        }
+
+        // 尝试从页面脚本提取信息
+        const nicknameMatch = html.match(/var\s+nickname\s*=\s*["']([^"']+)["']/) ||
+                              html.match(/"nickname"\s*:\s*"([^"]+)"/)
+        const avatarMatch = html.match(/var\s+headimg\s*=\s*["']([^"']+)["']/) ||
+                           html.match(/"headimg"\s*:\s*"([^"]+)"/)
+        const signatureMatch = html.match(/var\s+signature\s*=\s*["']([^"']+)["']/) ||
+                              html.match(/"signature"\s*:\s*"([^"]+)"/)
+
+        return {
+          nickname: nicknameMatch ? nicknameMatch[1] : null,
+          avatar: avatarMatch ? avatarMatch[1] : '',
+          signature: signatureMatch ? signatureMatch[1] : ''
+        }
+      })
+
+      if ('error' in result) {
+        logger.warn('Puppeteer访问返回验证页面，尝试直接获取文章验证Cookie')
+        // 尝试直接调用 getmsg API 验证 Cookie
+        const testResult = await testCookieByFetchingArticle(page, biz, cookies)
+        if (testResult) {
+          logger.info('✓ Cookie验证成功（通过获取文章）')
+          return {
+            biz,
+            nickname: '公众号',  // 使用默认名称
+            avatar: '',
+            signature: ''
+          }
+        }
+        throw new Error('Cookie 无效或已过期，请重新获取 Cookie')
+      }
+
+      if (!result.nickname) {
+        // 尝试通过获取文章验证
+        const testResult = await testCookieByFetchingArticle(page, biz, cookies)
+        if (testResult) {
+          logger.info('✓ Cookie验证成功（通过获取文章）')
+          return {
+            biz,
+            nickname: '公众号',
+            avatar: '',
+            signature: ''
+          }
+        }
+        throw new Error('无法获取公众号信息，Cookie 可能无效')
+      }
+
+      let nickname = result.nickname
+      if (nickname.includes('的历史消息')) {
+        nickname = nickname.replace('的历史消息', '').trim()
+      }
+
+      logger.info('✓ 公众号信息获取成功', { nickname, biz: biz.substring(0, 20) })
+
+      return {
+        biz,
+        nickname,
+        avatar: result.avatar,
+        signature: result.signature
+      }
+    } finally {
+      await browser.close()
     }
   } catch (error) {
     logger.error('获取公众号信息失败', {
       error: error instanceof Error ? error.message : error
     })
-    return null
+    // 重新抛出错误以便前端显示具体错误信息
+    throw error
+  }
+}
+
+/**
+ * 通过获取文章来测试 Cookie 是否有效
+ */
+async function testCookieByFetchingArticle(
+  page: puppeteer.Page,
+  biz: string,
+  cookies: WechatCookies
+): Promise<boolean> {
+  try {
+    const apiUrl = `https://mp.weixin.qq.com/mp/profile_ext?action=getmsg&__biz=${encodeURIComponent(biz)}&f=json&offset=0&count=1&is_ok=1&scene=124&uin=${encodeURIComponent(cookies.uin || '')}&key=${encodeURIComponent(cookies.key || '')}&pass_ticket=${encodeURIComponent(cookies.pass_ticket || '')}&appmsg_token=${encodeURIComponent(cookies.appmsg_token || '')}&x5=0&_=${Date.now()}`
+
+    const response = await page.evaluate(async (url: string) => {
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          }
+        })
+        return await res.json()
+      } catch {
+        return null
+      }
+    }, apiUrl)
+
+    if (response && response.ret === 0) {
+      return true
+    }
+
+    logger.debug('通过获取文章验证Cookie失败', { ret: response?.ret, errmsg: response?.errmsg })
+    return false
+  } catch (error) {
+    logger.debug('testCookieByFetchingArticle 异常', {
+      error: error instanceof Error ? error.message : error
+    })
+    return false
   }
 }
 

@@ -17,7 +17,7 @@ import {
 import { exportToExcel, saveExcelFile } from './services/excelExporter'
 import { downloadArticlesContent, DownloadFormat } from './services/contentDownloader'
 import { startClipboardMonitoring } from './services/cookieHelper'
-import { startProxyServer, stopProxyServer, isProxyRunning, getCACertPath } from './services/proxyServer'
+import { startProxyServer, stopProxyServer, isProxyRunning, getCACertPath, getCapturedArticles, clearCapturedArticles } from './services/proxyServer'
 import {
   installCACertificateToSystem,
   uninstallCACertificateFromSystem,
@@ -775,12 +775,19 @@ ipcMain.handle('auto-start-cookie-monitoring', async (event) => {
     originalProxySettings = await getProxyStatus()
     logger.info('已保存原始代理设置', originalProxySettings)
 
-    // 步骤3: 启动代理服务器
+    // 步骤3: 清空之前捕获的文章数据
+    clearCapturedArticles()
+
+    // 步骤4: 启动代理服务器
     await startProxyServer({
       port: PROXY_PORT,
       onCookieFound: (cookieString) => {
         logger.info('代理服务器捕获到Cookie')
         event.sender.send('auto-cookie-found', cookieString)
+      },
+      onArticlesFound: (articles, nickname) => {
+        logger.info('代理服务器捕获到文章列表', { count: articles.length, nickname })
+        event.sender.send('auto-articles-found', { articles, nickname })
       }
     })
 
@@ -881,6 +888,30 @@ ipcMain.handle('auto-stop-cookie-monitoring', async () => {
     return {
       success: false,
       error: error instanceof Error ? error.message : '停止失败'
+    }
+  }
+})
+
+// 获取代理捕获的文章列表
+ipcMain.handle('get-captured-articles', async () => {
+  try {
+    const { articles, nickname } = getCapturedArticles()
+    logger.info('获取已捕获的文章列表', { count: articles.length, nickname })
+
+    return {
+      success: true,
+      data: {
+        articles,
+        nickname
+      }
+    }
+  } catch (error) {
+    logger.error('获取已捕获文章失败', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '获取失败'
     }
   }
 })
